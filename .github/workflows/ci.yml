@@ -113,6 +113,11 @@ jobs:
         run: |
           set -o pipefail
           python3 test/qemu/expect-serial.py bin/trusted-pba.efi | tee -a qemu-serial.log
+      - name: QEMU/OVMF Secure-Boot-required fail-closed test (require_secure_boot policy, SB off)
+        shell: bash
+        run: |
+          set -o pipefail
+          task sb-require-test | tee -a qemu-serial.log
       - name: Upload serial log
         if: always()
         uses: actions/upload-artifact@v4

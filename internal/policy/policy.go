@@ -53,6 +53,9 @@ func Parse(data []byte) (*Policy, error) {
 	if err := dec.Decode(&p); err != nil {
 		return nil, fmt.Errorf("decode policy: %w", err)
 	}
+	if dec.More() {
+		return nil, errors.New("decode policy: unexpected trailing data")
+	}
 	if len(p.Entries) == 0 {
 		return nil, ErrNoEntries
 	}

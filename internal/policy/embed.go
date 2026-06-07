@@ -1,3 +1,5 @@
+//go:build !policytest
+
 package policy
 
 import _ "embed"
