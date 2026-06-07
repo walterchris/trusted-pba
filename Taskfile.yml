@@ -127,6 +127,13 @@ tasks:
         FORBID='TRUSTED-PBA: chainload returned,TEST-APP: ok'
         python3 test/qemu/expect-serial.py {{.BIN}}/{{.APP}}.efi
 
+  sb-matrix:
+    desc: Secure Boot matrix — SB off / enforcing-signed / enforcing-unsigned-rejected (needs virt-firmware, sbsign, openssl)
+    cmds:
+      - task: build
+      - task: testapp
+      - test/qemu/secureboot-matrix.sh {{.BIN}}/{{.APP}}.efi {{.BIN}}/testapp.efi
+
   test:
     desc: Run host Go tests
     cmds:
@@ -160,12 +167,13 @@ tasks:
         "{{.GCL}}" run ./...
 
   check:
-    desc: 'Local CI: lint + host tests + chainload smoke (happy + fail-closed)'
+    desc: 'Local CI: lint + host tests + chainload smoke (happy + fail-closed) + Secure Boot matrix'
     cmds:
       - task: lint
       - task: test
       - task: run
       - task: run-negative
+      - task: sb-matrix
 
   clean:
     desc: Remove build artifacts

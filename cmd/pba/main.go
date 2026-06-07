@@ -20,6 +20,7 @@ import (
 
 	"github.com/usbarmory/go-boot/uefi"
 	"github.com/usbarmory/go-boot/uefi/x64"
+	"github.com/walterchris/trusted-pba/internal/secureboot"
 )
 
 // Version is overridden at link time via -ldflags "-X 'main.Version=...'".
@@ -52,6 +53,15 @@ func main() {
 
 	fmt.Fprintf(out, "%s: start\r\n", banner)
 	fmt.Fprintf(out, "%s: version %s\r\n", banner, Version)
+
+	// Report firmware Secure Boot state. Phase 2 is detection + reporting only;
+	// enforcing a policy (e.g. refusing to proceed when not enforcing) is a later
+	// decision tied to the policy engine. See #35 and ADR-0003.
+	if st, err := secureboot.Detect(); err != nil {
+		fmt.Fprintf(out, "%s: secure-boot: detection failed: %v\r\n", banner, err)
+	} else {
+		fmt.Fprintf(out, "%s: secure-boot: %s\r\n", banner, st)
+	}
 
 	if err := chainload(Target); err != nil {
 		// Fail closed: report and halt. Never continue as if the boot succeeded.
