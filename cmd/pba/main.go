@@ -14,6 +14,8 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/usbarmory/go-boot/uefi"
 	"github.com/usbarmory/go-boot/uefi/x64"
@@ -24,33 +26,31 @@ var Version = "dev"
 
 const banner = "TRUSTED-PBA"
 
-// emit writes to both the UEFI ConOut console (visible on the VGA/text console)
-// and COM1 (x64.UART0), which is the path QEMU's -serial backend reliably
-// captures regardless of how the firmware routes its console.
-func emit(s string) {
-	fmt.Print(s)
-	x64.UART0.Write([]byte(s))
-}
+// out fans console output to the UEFI ConOut (os.Stdout, shown on the VGA/text
+// console) and COM1 serial (x64.UART0, which QEMU's -serial backend reliably
+// captures regardless of how the firmware routes its console). The writer set is
+// fixed for now; making it configurable is tracked in #29.
+var out io.Writer = io.MultiWriter(os.Stdout, x64.UART0)
 
 func main() {
 	// Disable the UEFI watchdog so the firmware does not auto-reboot on us.
 	// Errors from UEFI calls are never ignored (AGENTS.md); on this halt path they
 	// are not actionable beyond reporting, so we surface them and continue.
 	if err := x64.UEFI.Boot.SetWatchdogTimer(0); err != nil {
-		emit(banner + ": warn: could not disable watchdog: " + err.Error() + "\r\n")
+		fmt.Fprint(out, banner+": warn: could not disable watchdog: "+err.Error()+"\r\n")
 	}
 
-	emit(banner + ": start\r\n")
-	emit(banner + ": version " + Version + "\r\n")
+	fmt.Fprint(out, banner+": start\r\n")
+	fmt.Fprint(out, banner+": version "+Version+"\r\n")
 	// Stable success marker the test harness asserts on.
-	emit(banner + ": phase-0 skeleton ok\r\n")
-	emit(banner + ": halting\r\n")
+	fmt.Fprint(out, banner+": phase-0 skeleton ok\r\n")
+	fmt.Fprint(out, banner+": halting\r\n")
 
 	// Clean stop: power the machine off (QEMU exits on guest shutdown). This is
 	// deterministic for tests and avoids the firmware boot manager chaining to
 	// another boot entry.
 	if err := x64.UEFI.Runtime.ResetSystem(uefi.EfiResetShutdown); err != nil {
-		emit(banner + ": shutdown failed: " + err.Error() + "\r\n")
+		fmt.Fprint(out, banner+": shutdown failed: "+err.Error()+"\r\n")
 	}
 
 	// Phase-0 fallback ONLY: if ResetSystem returns, hand back to firmware rather
@@ -60,6 +60,6 @@ func main() {
 	// boot path" behavior the threat model forbids. Later phases (unlock/policy/
 	// chainload) MUST re-evaluate this, not copy it.
 	if err := x64.UEFI.Boot.Exit(0); err != nil {
-		emit(banner + ": exit failed: " + err.Error() + "\r\n")
+		fmt.Fprint(out, banner+": exit failed: "+err.Error()+"\r\n")
 	}
 }

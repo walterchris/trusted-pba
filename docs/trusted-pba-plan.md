@@ -244,7 +244,8 @@ trusted-pba/
 Slim and virtual: Linux host, Go toolchain, TamaGo, QEMU/KVM, OVMF/TianoCore,
 `sbsigntool` or equivalent, Python or Go test harness, Makefile.
 
-Primary loop: `make build`, `make qemu`, `make test`, `make secureboot-test`.
+Primary loop (via [go-task](https://taskfile.dev)): `task setup`, `task build`,
+`task run`, `task test`, `task check`.
 
 QEMU: x86_64, KVM if available, `OVMF_CODE.fd` + `OVMF_VARS.fd`, serial console
 logging, FAT EFI System Partition image, optional second disk, Secure Boot enabled

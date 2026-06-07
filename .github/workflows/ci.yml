@@ -71,15 +71,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-system-x86 ovmf mtools
-      - name: Install TamaGo toolchain (go1.26.4)
-        run: |
-          curl -fsSL -o /tmp/tamago.tgz https://github.com/usbarmory/tamago-go/releases/download/go1.26.4/tamago-go1.26.4.linux-amd64.tar.gz
-          sudo tar -xzf /tmp/tamago.tgz -C /
-          /usr/local/tamago-go/bin/go version
-      - name: Build trusted-pba.efi
-        run: make build
-        env:
-          TAMAGO: /usr/local/tamago-go/bin/go
+      - name: Install go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build trusted-pba.efi (task installs the pinned TamaGo toolchain)
+        run: task build
       - name: QEMU/OVMF smoke test (assert serial markers)
         shell: bash
         run: |
