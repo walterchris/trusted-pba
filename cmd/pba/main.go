@@ -58,6 +58,9 @@ func main() {
 	// enforcing a policy (e.g. refusing to proceed when not enforcing) is a later
 	// decision tied to the policy engine. See #35 and ADR-0003.
 	if st, err := secureboot.Detect(); err != nil {
+		// Phase 2 reports and continues. Phase 3 MUST fail closed here — treating a
+		// detection failure or "not enforcing" as bootable violates CLAUDE.md
+		// ("never treat Secure Boot disabled and enabled as equivalent"). See #35.
 		fmt.Fprintf(out, "%s: secure-boot: detection failed: %v\r\n", banner, err)
 	} else {
 		fmt.Fprintf(out, "%s: secure-boot: %s\r\n", banner, st)

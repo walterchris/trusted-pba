@@ -51,7 +51,9 @@ PBA + signed chainload target load.
 Satisfies the §5.3 human gate (Secure Boot behavior) and §23 ADR requirement via
 approval of the Phase 2 PR. Advances CRA "secure by default" (SB test matrix
 exists); full enforcement and the target/revocation matrix (#37) follow. Test keys
-only (§13).
+only (§13). The threat model (#4) and risk assessment (#5) must capture the Secure
+Boot trust chain (a core asset, baseline §10) and the Phase-2 detection-failure
+fail-open boundary; that documentation is deferred to those issues and tracked here.
 
 ## Test Impact
 Secure Boot matrix (`task sb-matrix`): SB-off unsigned boots; SB-on signed boots;
