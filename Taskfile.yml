@@ -1,29 +1,43 @@
-# Taskfile for Trusted PBA — convenience wrapper for setup/build/run/test.
+# Taskfile for Trusted PBA — the single entry point for setup/build/run/test.
 # Install go-task: https://taskfile.dev/installation/   Then: `task setup && task run`.
 #
-# Build logic lives in the Makefile (single source of truth); these tasks delegate
-# to it. The added value here is `setup`, which installs the pinned TamaGo toolchain.
+# This file owns the build (there is no Makefile). The QEMU launch + serial
+# assertion live in test/qemu/{run-qemu.sh,expect-serial.py}, which `task run`
+# invokes.
 #
-# TamaGo location resolves from $TAMAGO (an existing toolchain) if set, else a
-# managed install under $TAMAGO_ROOT (default ~/.tamago/<version>).
+# TamaGo resolves from $TAMAGO (an existing toolchain) if set, else a managed
+# install under $TAMAGO_ROOT (default ~/.tamago/<version>); `task setup`/`build`
+# installs it automatically when missing.
 version: '3'
 
+env:
+  # Exported for any go subprocess that consults it.
+  TAMAGO: '{{.TAMAGO_BIN}}'
+
 vars:
+  # --- toolchain ---
   TAMAGO_VERSION: go1.26.4
   TAMAGO_ROOT:
     sh: echo "${TAMAGO_ROOT:-$HOME/.tamago/{{.TAMAGO_VERSION}}}"
   TAMAGO_BIN:
     sh: echo "${TAMAGO:-{{.TAMAGO_ROOT}}/bin/go}"
-
-env:
-  # Exported so the delegated Makefile targets pick up the toolchain.
-  TAMAGO: '{{.TAMAGO_BIN}}'
+  # --- dependency pins (bump deliberately; supply-chain hygiene, baseline §14) ---
+  GOBOOT_VERSION: v1.6.2
+  TAMAGO_LIB_VERSION: v1.26.4
+  # --- build ---
+  APP: trusted-pba
+  BIN: bin
+  IMAGE_BASE: '10000000'            # PE image base 0x10000000
+  TEXT_START: '268500992'           # 0x10010000 = IMAGE_BASE + 0x10000
+  BUILD_TAGS: linkcpuinit,linkramsize,linkramstart,linkprintk
+  GOENV: GOOS=tamago GOOSPKG=github.com/usbarmory/tamago GOARCH=amd64
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
 
 tasks:
   default:
     desc: List available tasks
-    cmds:
-      - task --list
+    cmds: [task --list]
     silent: true
 
   setup:
@@ -46,24 +60,42 @@ tasks:
 
   deps:
     desc: Resolve and pin Go module dependencies (go-boot, tamago)
+    deps: [toolchain]
     cmds:
-      - make deps
+      - '{{.GOENV}} "{{.TAMAGO_BIN}}" get github.com/usbarmory/go-boot@{{.GOBOOT_VERSION}} github.com/usbarmory/tamago@{{.TAMAGO_LIB_VERSION}}'
+      - '{{.GOENV}} "{{.TAMAGO_BIN}}" mod tidy'
 
   build:
     desc: Build bin/trusted-pba.efi
+    deps: [toolchain]
     cmds:
-      - make build
+      - mkdir -p {{.BIN}}
+      # ELF (tamago target) -> PE/EFI application via objcopy, then patch the PE
+      # COFF Characteristics at offset 150 to 0x0226 (EXECUTABLE_IMAGE |
+      # LINE_NUMS_STRIPPED | LARGE_ADDRESS_AWARE | DEBUG_STRIPPED). Mirrors the
+      # go-boot reference build; the qemu-smoke test guards a non-bootable result.
+      - >-
+        {{.GOENV}} "{{.TAMAGO_BIN}}" build -tags {{.BUILD_TAGS}} -trimpath
+        -ldflags "-s -w -E cpuinit -T {{.TEXT_START}} -R 0x1000 -X 'main.Version={{.VERSION}}'"
+        -o {{.BIN}}/{{.APP}} ./cmd/pba
+      - >-
+        objcopy --strip-debug --output-target efi-app-x86_64 --subsystem=efi-app
+        --image-base 0x{{.IMAGE_BASE}} --stack=0x10000
+        {{.BIN}}/{{.APP}} {{.BIN}}/{{.APP}}.efi
+      - printf '\x26\x02' | dd of={{.BIN}}/{{.APP}}.efi bs=1 seek=150 count=2 conv=notrunc,fsync status=none
+      - echo "built {{.BIN}}/{{.APP}}.efi (version {{.VERSION}})"
 
   run:
     desc: Build and boot trusted-pba.efi in QEMU/OVMF (asserts serial markers)
     aliases: [qemu]
     cmds:
-      - make qemu
+      - task: build
+      - python3 test/qemu/expect-serial.py {{.BIN}}/{{.APP}}.efi
 
   test:
     desc: Run host Go tests
     cmds:
-      - make test
+      - go test ./...
 
   vet:
     desc: Run go vet on host packages
@@ -80,10 +112,9 @@ tasks:
     cmds:
       - task: vet
       - task: test
-      - task: build
       - task: run
 
   clean:
     desc: Remove build artifacts
     cmds:
-      - make clean
+      - rm -rf {{.BIN}}

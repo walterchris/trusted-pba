@@ -5,7 +5,7 @@ go 1.26.4
 // UEFI x86_64 board support (CPU/serial/EFI-System-Table bring-up) lives in
 // go-boot's uefi/x64 package; tamago is the bare-metal Go runtime. Keep the
 // tamago library minor in lockstep with the tamago-go toolchain (go1.26.4).
-// Dependencies are resolved/pinned by `make deps` (go get + mod tidy under
+// Dependencies are resolved/pinned by `task deps` (go get + mod tidy under
 // GOOS=tamago); the require block below is populated on first resolution.
 
 require github.com/usbarmory/go-boot v1.6.2

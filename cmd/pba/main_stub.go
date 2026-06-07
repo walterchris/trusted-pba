@@ -15,6 +15,6 @@ import (
 func main() {
 	fmt.Fprintln(os.Stderr,
 		"trusted-pba is a UEFI application and must be built with the TamaGo "+
-			"toolchain (GOOS=tamago GOARCH=amd64). Use `make build`.")
+			"toolchain (GOOS=tamago GOARCH=amd64). Use `task build`.")
 	os.Exit(1)
 }
