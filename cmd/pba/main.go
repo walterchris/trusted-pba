@@ -1,3 +1,5 @@
+//go:build tamago && amd64
+
 // Command pba is the Trusted PBA UEFI application.
 //
 // Phase 0 skeleton: it boots as a UEFI x86_64 application under TamaGo, emits
@@ -7,9 +9,6 @@
 // The UEFI board layer (CPU + serial init, EFI System Table parsing, heap setup)
 // is provided by go-boot's uefi/x64 package, which performs that bring-up
 // automatically on import.
-
-//go:build tamago && amd64
-
 package main
 
 import (

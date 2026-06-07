@@ -1,10 +1,11 @@
-// Host stub: the real PBA entrypoint (main.go) is a TamaGo UEFI binary and only
-// builds under GOOS=tamago. This stub lets host tooling (`go build`/`go test
-// ./...`, vet, IDEs) compile the package without the tamago-only dependencies,
-// and prints guidance if someone runs the host build by mistake.
-
 //go:build !tamago
 
+// Command pba is the Trusted PBA UEFI application.
+//
+// The real entrypoint (main.go) is a TamaGo UEFI binary built under GOOS=tamago.
+// This host stub lets host tooling (`go build`/`go test ./...`, vet, linters)
+// compile the package without the tamago-only dependencies, and prints guidance
+// if someone runs the host build by mistake.
 package main
 
 import (

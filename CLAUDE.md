@@ -96,6 +96,23 @@ trusted-pba.efi
 
 For Windows, let firmware validate Windows Boot Manager — do not manually load it.
 
+## Go code rules
+
+Idiomatic, clean Go — enforced by the **go-reviewer** agent in review and by
+`gofmt`/`go vet`/`golangci-lint` in CI. Full guide:
+[`docs/development/go-coding-standards.md`](docs/development/go-coding-standards.md).
+
+- **Reach for the stdlib before writing a helper** — `io.Writer`/`io.MultiWriter`,
+  `errors.Join`, `slices`/`maps`, `cmp.Or`. (The PR #26 `emit()`→`io.MultiWriter`
+  miss is exactly what this prevents.)
+- Check **every** error; wrap with `%w`; compare via `errors.Is`/`errors.As`. Never
+  ignore a UEFI/transport error. Never `panic` on attacker/device input — fail closed.
+- **Accept interfaces, return concrete types.** Small interfaces (1–3 methods),
+  defined where consumed. `any`, not `interface{}`.
+- Least code; no speculative abstraction. Early returns; no global mutable state.
+- Doc-comment every exported symbol (start with its name); `gofmt` is mandatory.
+- TamaGo-only files: `//go:build tamago && amd64` + a `!tamago` host stub.
+
 ## Testing & evidence expectations
 
 - Every feature must have a virtual test path; prefer deterministic tests over

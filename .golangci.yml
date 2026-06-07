@@ -1,0 +1,16 @@
+# golangci-lint v2 configuration for Trusted PBA.
+# Default linters (errcheck, govet, ineffassign, staticcheck, unused) plus the
+# extras below. Run: `task lint` / `golangci-lint run`. See
+# docs/development/go-coding-standards.md.
+version: "2"
+
+linters:
+  enable:
+    - errorlint    # correct error wrapping / errors.Is/As usage (Go 1.13+)
+    - revive       # style + exported-symbol docs
+    - gocritic     # bug/perf/style diagnostics
+    - misspell     # comment/string typos
+    - unconvert    # redundant type conversions
+    - unparam      # unused function parameters/results
+    - bodyclose    # unclosed HTTP response bodies
+    - gosec        # common security issues

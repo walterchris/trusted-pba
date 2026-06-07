@@ -17,8 +17,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: gofmt / vet (placeholder until go.mod lands — #PHASE0)
-        run: echo "TODO(Phase 0): gofmt -l . && go vet ./..."
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then echo "gofmt needed on:"; echo "$files"; exit 1; fi
+      - name: go vet
+        run: go vet ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
 
   unit-test:
     runs-on: ubuntu-latest
