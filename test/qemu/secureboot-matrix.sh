@@ -3,10 +3,11 @@
 # Secure Boot test matrix for Trusted PBA (Phase 2 foundation slice, #36).
 #
 # Generates throwaway TEST PK/KEK/db keys, enrolls them into an OVMF variable
-# store (enforcing), signs the PBA + chainload fixture, and runs three scenarios:
+# store (enforcing), signs the PBA + chainload fixture, and runs four scenarios:
 #   A. SB off (Setup Mode), unsigned PBA      -> boots; PBA reports "secure-boot: off"
-#   B. SB on  (enforcing),  signed PBA        -> boots; PBA reports "enforcing"
+#   B. SB on  (enforcing),  db-signed PBA     -> boots; PBA reports "enforcing"
 #   C. SB on  (enforcing),  UNSIGNED PBA      -> firmware REJECTS it (fail closed)
+#   D. SB on  (enforcing),  WRONG-key PBA     -> firmware REJECTS it (signature != trust)
 #
 #   secureboot-matrix.sh <pba.efi> <testapp.efi>
 #
@@ -38,6 +39,12 @@ for role in PK KEK db; do
 		-keyout "$WORK/$role.key" -out "$WORK/$role.crt" 2>/dev/null
 done
 
+# An extra keypair that is NOT enrolled anywhere — proves that a validly-signed but
+# UNTRUSTED image is still rejected (a signature alone is not trust).
+openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+	-subj "/CN=TrustedPBA UNTRUSTED key/" \
+	-keyout "$WORK/bad.key" -out "$WORK/bad.crt" 2>/dev/null
+
 echo "## Enrolling keys into OVMF VARS (enforcing) from $OVMF_VARS_TEMPLATE"
 "$VFV" --input "$OVMF_VARS_TEMPLATE" --output "$WORK/vars.secboot.fd" \
 	--set-pk "$GUID" "$WORK/PK.crt" \
@@ -49,6 +56,8 @@ echo "## Signing PBA + fixture with the db key"
 sbsign --key "$WORK/db.key" --cert "$WORK/db.crt" --output "$WORK/pba.signed.efi" "$PBA"
 sbsign --key "$WORK/db.key" --cert "$WORK/db.crt" --output "$WORK/testapp.signed.efi" "$TESTAPP"
 sbverify --cert "$WORK/db.crt" "$WORK/pba.signed.efi" >/dev/null
+# PBA signed by the untrusted key (cert not in db) — for the wrong-key scenario.
+sbsign --key "$WORK/bad.key" --cert "$WORK/bad.crt" --output "$WORK/pba.badsigned.efi" "$PBA"
 
 fail=0
 scenario() {
@@ -78,6 +87,15 @@ scenario "C: SB enforcing, unsigned PBA -> firmware rejects" \
 		REQUIRE='Access Denied' \
 		FORBID='TRUSTED-PBA: start' \
 		python3 "$EXPECT" "$PBA"
+
+# D: Secure Boot enforcing — PBA signed by an UNTRUSTED key (not in db) is rejected.
+# Proves a signature alone is not enough: the firmware rejects it just like the
+# unsigned case ("Access Denied" / "Security Violation"). FORBID is the invariant.
+scenario "D: SB enforcing, PBA signed by UNTRUSTED key -> firmware rejects" \
+	env OVMF_CODE="$OVMF_SECBOOT_CODE" OVMF_VARS="$WORK/vars.secboot.fd" \
+		REQUIRE='Access Denied|Security Violation' \
+		FORBID='TRUSTED-PBA: start' \
+		python3 "$EXPECT" "$WORK/pba.badsigned.efi"
 
 echo
 if [ "$fail" -eq 0 ]; then
