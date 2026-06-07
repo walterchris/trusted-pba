@@ -106,6 +106,13 @@ For Windows, let firmware validate Windows Boot Manager — do not manually load
 - For security-, release-, or compliance-relevant changes, update the linked docs
   and the evidence references described in the compliance baseline.
 
+## Commits & branches
+
+- **Sign off every commit** with `git commit -s` (DCO `Signed-off-by:` trailer) —
+  no exceptions, including amends and squashes.
+- Work on `feat/`·`fix/`·`chore/`·`docs/` branches; `main` is protected (PR only,
+  no direct/force push). See [`docs/development/branching.md`](docs/development/branching.md).
+
 ## Agent output format
 
 For every change, report: **summary · files changed · tests run · security impact ·
