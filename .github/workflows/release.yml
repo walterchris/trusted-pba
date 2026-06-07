@@ -1,0 +1,31 @@
+# Release pipeline — manual, gated (compliance baseline §5.3, §18, §19).
+# Release builds run on controlled CI, NEVER a developer workstation.
+# Production signing and final approval are human gates (Release Owner).
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. v0.1.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release   # protected environment → required human approval gate
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release artifact (placeholder)
+        run: echo "TODO: reproducible TamaGo build of trusted-pba.efi for ${{ inputs.version }}"
+      - name: Generate SBOM (placeholder)
+        run: echo "TODO: SBOM -> evidence/sbom/"
+      - name: Generate build provenance (placeholder — SLSA)
+        run: echo "TODO: provenance linking artifact to source commit -> evidence/release-provenance/"
+      - name: Sign artifact (placeholder — human-gated production signing)
+        run: echo "TODO: sign via controlled key material; NEVER from a developer laptop"
+      - name: Release checklist gate (placeholder — DoD §24)
+        run: echo "TODO: verify release checklist complete before publish"

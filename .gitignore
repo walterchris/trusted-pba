@@ -1,0 +1,30 @@
+# Build output
+/build/
+/dist/
+*.efi
+!test/fixtures/**/*.efi        # committed test fixtures are intentional
+
+# Go
+/vendor/
+*.test
+*.out
+coverage*.out
+
+# Secrets & keys — NEVER commit private key material (baseline §13)
+*.key
+*.pem
+*.pfx
+*.p12
+*_private*
+secrets/
+test/qemu/keys/*-private*
+
+# OVMF mutable variable stores (regenerated per run; templates are tracked explicitly)
+test/qemu/ovmf/*_VARS*.fd
+
+# Local tooling / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+*.log

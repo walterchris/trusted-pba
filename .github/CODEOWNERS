@@ -1,0 +1,23 @@
+# CODEOWNERS — maps the accountable roles from compliance baseline §5.1.
+# Single maintainer today; reassign to the named role owners as the team grows.
+#
+# Roles (baseline §5.1): Product Owner, Security Owner, Architecture Owner,
+# Release Owner, Compliance Owner, Vulnerability Response Owner.
+
+# Default owner
+*                                   @walterchris
+
+# Security-critical product code (Security + Architecture Owner review required)
+/internal/opal/                     @walterchris
+/internal/policy/                   @walterchris
+/internal/uefi/secureboot.go        @walterchris
+
+# Security & compliance documentation (Security + Compliance Owner)
+/docs/security/                     @walterchris
+/docs/compliance/                   @walterchris
+/docs/architecture/adr/             @walterchris
+
+# Release, CI, and signing configuration (Release Owner approval — baseline §5.3)
+/.github/workflows/                 @walterchris
+/AGENTS.md                          @walterchris
+/CLAUDE.md                          @walterchris
