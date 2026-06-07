@@ -105,6 +105,14 @@ jobs:
         run: |
           set -o pipefail
           python3 test/qemu/expect-serial.py bin/trusted-pba.efi | tee qemu-serial.log
+      - name: QEMU/OVMF fail-closed test (no target staged → chainload must fail)
+        shell: bash
+        env:
+          REQUIRE: 'TRUSTED-PBA: chainload failed'
+          FORBID: 'TRUSTED-PBA: chainload returned,TEST-APP: ok'
+        run: |
+          set -o pipefail
+          python3 test/qemu/expect-serial.py bin/trusted-pba.efi | tee -a qemu-serial.log
       - name: Upload serial log
         if: always()
         uses: actions/upload-artifact@v4

@@ -88,8 +88,13 @@ tasks:
   testapp:
     desc: Build the gnu-efi chainload test fixture (bin/testapp.efi)
     vars:
-      EFILIB: /usr/lib
-      CFLAGS: -I/usr/include/efi -I/usr/include/efi/x86_64 -fpic -ffreestanding -fno-stack-protector -fno-strict-aliasing -fshort-wchar -mno-red-zone -Wall
+      # gnu-efi link inputs / headers; override via $EFILIB / $EFIINC if a distro
+      # places them elsewhere than the Fedora/Ubuntu default of /usr/lib + /usr/include/efi.
+      EFILIB:
+        sh: echo "${EFILIB:-/usr/lib}"
+      EFIINC:
+        sh: echo "${EFIINC:-/usr/include/efi}"
+      CFLAGS: -I{{.EFIINC}} -I{{.EFIINC}}/x86_64 -fpic -ffreestanding -fno-stack-protector -fno-strict-aliasing -fshort-wchar -mno-red-zone -Wall
     cmds:
       - mkdir -p {{.BIN}}
       - gcc {{.CFLAGS}} -c test/fixtures/testapp/testapp.c -o {{.BIN}}/testapp.o
@@ -112,6 +117,15 @@ tasks:
       - task: build
       - task: testapp
       - TESTAPP={{.BIN}}/testapp.efi python3 test/qemu/expect-serial.py {{.BIN}}/{{.APP}}.efi
+
+  run-negative:
+    desc: Boot the PBA with NO chainload target staged; assert it fails closed (no success)
+    cmds:
+      - task: build
+      - >-
+        REQUIRE='TRUSTED-PBA: chainload failed'
+        FORBID='TRUSTED-PBA: chainload returned,TEST-APP: ok'
+        python3 test/qemu/expect-serial.py {{.BIN}}/{{.APP}}.efi
 
   test:
     desc: Run host Go tests
@@ -146,11 +160,12 @@ tasks:
         "{{.GCL}}" run ./...
 
   check:
-    desc: 'Local CI: lint + host tests + build + QEMU smoke'
+    desc: 'Local CI: lint + host tests + chainload smoke (happy + fail-closed)'
     cmds:
       - task: lint
       - task: test
       - task: run
+      - task: run-negative
 
   clean:
     desc: Remove build artifacts
