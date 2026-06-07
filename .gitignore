@@ -1,4 +1,5 @@
 # Build output
+/bin/
 /build/
 /dist/
 *.efi
