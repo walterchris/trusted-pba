@@ -34,7 +34,11 @@ func emit(s string) {
 
 func main() {
 	// Disable the UEFI watchdog so the firmware does not auto-reboot on us.
-	x64.UEFI.Boot.SetWatchdogTimer(0)
+	// Errors from UEFI calls are never ignored (AGENTS.md); on this halt path they
+	// are not actionable beyond reporting, so we surface them and continue.
+	if err := x64.UEFI.Boot.SetWatchdogTimer(0); err != nil {
+		emit(banner + ": warn: could not disable watchdog: " + err.Error() + "\r\n")
+	}
 
 	emit(banner + ": start\r\n")
 	emit(banner + ": version " + Version + "\r\n")
@@ -44,11 +48,18 @@ func main() {
 
 	// Clean stop: power the machine off (QEMU exits on guest shutdown). This is
 	// deterministic for tests and avoids the firmware boot manager chaining to
-	// another boot entry. Later phases that chainload an OS will instead hand
-	// control back to firmware / a loaded image rather than shutting down.
-	x64.UEFI.Runtime.ResetSystem(uefi.EfiResetShutdown)
+	// another boot entry.
+	if err := x64.UEFI.Runtime.ResetSystem(uefi.EfiResetShutdown); err != nil {
+		emit(banner + ": shutdown failed: " + err.Error() + "\r\n")
+	}
 
-	// If ResetSystem unexpectedly returns, hand back to the firmware cleanly
-	// rather than falling off the end of main (which has no OS to return to).
-	x64.UEFI.Boot.Exit(0)
+	// Phase-0 fallback ONLY: if ResetSystem returns, hand back to firmware rather
+	// than falling off the end of main (which has no OS to return to). WARNING:
+	// Boot.Exit returns control to the UEFI boot manager, which on real hardware
+	// proceeds to the NEXT boot option — exactly the "silently continue to another
+	// boot path" behavior the threat model forbids. Later phases (unlock/policy/
+	// chainload) MUST re-evaluate this, not copy it.
+	if err := x64.UEFI.Boot.Exit(0); err != nil {
+		emit(banner + ": exit failed: " + err.Error() + "\r\n")
+	}
 }
