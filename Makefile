@@ -31,9 +31,12 @@ all: build
 check_tamago:
 	@test -x "$(TAMAGO)" || { echo "TamaGo not found at TAMAGO=$(TAMAGO). Install tamago-go and set TAMAGO."; exit 1; }
 
-# Resolve and pin dependencies (go-boot + tamago) under the tamago target.
+# Resolve dependencies under the tamago target. Versions are pinned so a dep
+# bump is a deliberate, reviewable go.mod change (supply-chain hygiene, §14) —
+# do not float go-boot to @latest here.
+GOBOOT_VERSION ?= v1.6.2
 deps: check_tamago
-	$(GOENV) $(TAMAGO) get github.com/usbarmory/go-boot@latest github.com/usbarmory/tamago@v1.26.4
+	$(GOENV) $(TAMAGO) get github.com/usbarmory/go-boot@$(GOBOOT_VERSION) github.com/usbarmory/tamago@v1.26.4
 	$(GOENV) $(TAMAGO) mod tidy
 
 $(BIN):
@@ -50,6 +53,11 @@ $(BIN)/$(APP).efi: $(SRC) go.mod | $(BIN) check_tamago
 		--image-base 0x$(IMAGE_BASE) \
 		--stack=0x10000 \
 		$(BIN)/$(APP) $(BIN)/$(APP).efi
+	# Patch the PE COFF Characteristics field (offset 150 for this binutils/tamago
+	# output: DOS e_lfanew 0x80 + 22) to 0x0226 = EXECUTABLE_IMAGE | LINE_NUMS_STRIPPED
+	# | LARGE_ADDRESS_AWARE | DEBUG_STRIPPED. Mirrors go-boot's reference Makefile.
+	# A binutils layout change would shift this offset; the qemu-smoke test guards
+	# against a non-bootable result.
 	printf '\x26\x02' | dd of=$(BIN)/$(APP).efi bs=1 seek=150 count=2 conv=notrunc,fsync status=none
 	@echo "built $(BIN)/$(APP).efi (version $(VERSION))"
 

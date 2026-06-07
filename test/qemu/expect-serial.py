@@ -24,6 +24,16 @@ SUCCESS = re.compile(rb"TRUSTED-PBA: phase-0 skeleton ok")
 TIMEOUT = float(os.environ.get("QEMU_TIMEOUT", "120"))
 
 
+class _HardTimeout(Exception):
+    pass
+
+
+def _on_alarm(_signum, _frame):
+    # Raised in the main thread, interrupting a blocking readline() so a silent
+    # QEMU hang (no newline ever emitted) cannot wedge the harness forever.
+    raise _HardTimeout()
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         sys.exit("usage: expect-serial.py <app.efi>")
@@ -40,6 +50,10 @@ def main() -> int:
     deadline = time.monotonic() + TIMEOUT
     seen_start = seen_ok = False
     buf = b""
+    # Hard wall-clock guard: fires even if QEMU emits no further bytes (blocking
+    # readline). A couple of seconds of slack over the soft deadline below.
+    signal.signal(signal.SIGALRM, _on_alarm)
+    signal.alarm(int(TIMEOUT) + 2)
     try:
         for line in iter(proc.stdout.readline, b""):
             sys.stdout.buffer.write(line)
@@ -54,7 +68,10 @@ def main() -> int:
             if time.monotonic() > deadline:
                 print("\n[expect-serial] FAIL: timeout", flush=True)
                 break
+    except _HardTimeout:
+        print("\n[expect-serial] FAIL: hard timeout (no output)", flush=True)
     finally:
+        signal.alarm(0)
         try:
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
         except ProcessLookupError:

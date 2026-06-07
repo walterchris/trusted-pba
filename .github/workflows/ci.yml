@@ -64,6 +64,7 @@ jobs:
 
   qemu-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Install QEMU, OVMF, mtools
@@ -80,7 +81,10 @@ jobs:
         env:
           TAMAGO: /usr/local/tamago-go/bin/go
       - name: QEMU/OVMF smoke test (assert serial markers)
-        run: python3 test/qemu/expect-serial.py bin/trusted-pba.efi | tee qemu-serial.log
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 test/qemu/expect-serial.py bin/trusted-pba.efi | tee qemu-serial.log
       - name: Upload serial log
         if: always()
         uses: actions/upload-artifact@v4
