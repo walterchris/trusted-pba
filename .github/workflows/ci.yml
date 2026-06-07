@@ -1,11 +1,12 @@
 # Virtual CI — runs on every PR, no hardware (compliance baseline §18).
-# NOTE: this is the SKELETON. Stages echo their intent and are replaced with real
-# implementations by their tracked issues as the codebase lands. They are marked
-# (placeholder) so a green run is not mistaken for real coverage.
+# NOTE: lint and qemu-smoke are real; the other jobs are SKELETON placeholders
+# (clearly named) that their tracked issues (#9 + phase issues) replace with real
+# implementations. They intentionally do nothing yet.
 name: ci
 
 on:
   pull_request:
+    branches: [main]
   push:
     branches: [main]
 
@@ -36,42 +37,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: go test (placeholder — native Opal mock tests, #PHASE4)
-        run: echo "TODO: go test ./... with coverage; upload to evidence/test-reports/"
+        run: |
+          echo "TODO: go test ./... with coverage; upload to evidence/test-reports/"
 
   fuzz-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: parser fuzz smoke (placeholder — #PHASE4)
-        run: echo "TODO: go test -run=Fuzz -fuzz=. -fuzztime=30s on Opal/policy parsers"
+        run: |
+          echo "TODO: go test -run=Fuzz -fuzz=. -fuzztime=30s on Opal/policy parsers"
 
   sast:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: static analysis (placeholder)
-        run: echo "TODO: govulncheck + staticcheck/gosec; upload to evidence/sast-reports/"
+        run: |
+          echo "TODO: govulncheck + staticcheck/gosec; upload to evidence/sast-reports/"
 
   dependency-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: dependency + license scan (placeholder)
-        run: echo "TODO: vulnerability + license scan; upload to evidence/dependency-scans/"
+        run: |
+          echo "TODO: vulnerability + license scan; upload to evidence/dependency-scans/"
 
   sbom:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: generate SBOM (placeholder)
-        run: echo "TODO: SPDX/CycloneDX SBOM; upload to evidence/sbom/"
+        run: |
+          echo "TODO: SPDX/CycloneDX SBOM; upload to evidence/sbom/"
 
   secret-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: secret scan (placeholder)
-        run: echo "TODO: gitleaks/trufflehog over the diff"
+        run: |
+          echo "TODO: gitleaks/trufflehog over the diff"
 
   qemu-smoke:
     runs-on: ubuntu-latest
@@ -106,11 +113,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Secure Boot matrix (placeholder — #PHASE2)
-        run: echo "TODO: signed/unsigned/untrusted/revoked x SB on/off; negative cases fail closed"
+        run: |
+          echo "TODO: signed/unsigned/untrusted/revoked x SB on/off; negative cases fail closed"
 
   mock-opal-integration:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: mock Opal unlock + chainload (placeholder — #PHASE6)
-        run: echo "TODO: MockOpalDxe -> PBA unlock -> chainload test app; fail closed on Opal failure"
+        run: |
+          echo "TODO: MockOpalDxe -> PBA unlock -> chainload test app; fail closed on Opal failure"
