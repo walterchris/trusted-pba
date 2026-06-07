@@ -32,6 +32,10 @@ var Target = "EFI/TEST/TESTAPP.EFI"
 
 const banner = "TRUSTED-PBA"
 
+// bootPolicy is go-boot's LoadImage "boot" argument: 0 means BootPolicy = FALSE —
+// the image is loaded by us, not via the firmware boot-manager device-path policy.
+const bootPolicy = 0
+
 // out fans console output to the UEFI ConOut (os.Stdout, shown on the VGA/text
 // console) and COM1 serial (x64.UART0, which QEMU's -serial backend reliably
 // captures regardless of how the firmware routes its console). The writer set is
@@ -70,7 +74,11 @@ func chainload(target string) error {
 	}
 	fmt.Fprintf(out, "%s: ESP opened\r\n", banner)
 
-	img, err := x64.UEFI.Boot.LoadImage(0, root, target)
+	// SECURITY (Phase 1): no image verification or Secure Boot enforcement is done
+	// before loading the target — that trust gate is added in Phase 2 (Secure Boot)
+	// and Phase 3 (policy engine). This build is CI/dev-only until then; it must not
+	// gate a real boot. See docs/architecture/adr/ADR-0006-chainload-mechanism.md.
+	img, err := x64.UEFI.Boot.LoadImage(bootPolicy, root, target)
 	if err != nil {
 		return fmt.Errorf("load %q: %w", target, err)
 	}
