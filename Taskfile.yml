@@ -85,12 +85,33 @@ tasks:
       - printf '\x26\x02' | dd of={{.BIN}}/{{.APP}}.efi bs=1 seek=150 count=2 conv=notrunc,fsync status=none
       - echo "built {{.BIN}}/{{.APP}}.efi (version {{.VERSION}})"
 
+  testapp:
+    desc: Build the gnu-efi chainload test fixture (bin/testapp.efi)
+    vars:
+      EFILIB: /usr/lib
+      CFLAGS: -I/usr/include/efi -I/usr/include/efi/x86_64 -fpic -ffreestanding -fno-stack-protector -fno-strict-aliasing -fshort-wchar -mno-red-zone -Wall
+    cmds:
+      - mkdir -p {{.BIN}}
+      - gcc {{.CFLAGS}} -c test/fixtures/testapp/testapp.c -o {{.BIN}}/testapp.o
+      - >-
+        ld {{.BIN}}/testapp.o {{.EFILIB}}/crt0-efi-x86_64.o -nostdlib -znocombreloc
+        -T {{.EFILIB}}/elf_x86_64_efi.lds -shared -Bsymbolic -L{{.EFILIB}} -lgnuefi -lefi
+        -o {{.BIN}}/testapp.so
+      # Full canonical gnu-efi section list — the relocation sections (.rel*/.rela*)
+      # are required or the loaded image's pointers are not fixed up (garbage output).
+      - >-
+        objcopy -j .text -j .sdata -j .data -j .dynamic -j .dynsym
+        -j '.rel.*' -j '.rela.*' -j .rel -j .rela -j .reloc
+        --target efi-app-x86_64 {{.BIN}}/testapp.so {{.BIN}}/testapp.efi
+      - echo "built {{.BIN}}/testapp.efi"
+
   run:
-    desc: Build and boot trusted-pba.efi in QEMU/OVMF (asserts serial markers)
+    desc: Build PBA + test fixture and boot in QEMU/OVMF (asserts chainload markers)
     aliases: [qemu]
     cmds:
       - task: build
-      - python3 test/qemu/expect-serial.py {{.BIN}}/{{.APP}}.efi
+      - task: testapp
+      - TESTAPP={{.BIN}}/testapp.efi python3 test/qemu/expect-serial.py {{.BIN}}/{{.APP}}.efi
 
   test:
     desc: Run host Go tests
