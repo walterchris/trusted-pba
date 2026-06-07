@@ -22,6 +22,10 @@ EXPECT="$HERE/expect-serial.py"
 
 VFV="${VIRT_FW_VARS:-$HOME/.local/bin/virt-fw-vars}"
 command -v "$VFV" >/dev/null 2>&1 || VFV="virt-fw-vars"
+command -v "$VFV" >/dev/null 2>&1 || {
+	echo "virt-fw-vars not found (set VIRT_FW_VARS or: pip install virt-firmware)" >&2
+	exit 2
+}
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -65,9 +69,13 @@ scenario "B: SB enforcing, signed PBA -> boots" \
 		python3 "$EXPECT" "$WORK/pba.signed.efi"
 
 # C: Secure Boot enforcing — UNSIGNED PBA is rejected by firmware (fail closed).
+# The firmware emits e.g. "failed to load Boot0002 ...: Access Denied -- rejected
+# probably by Secure Boot". We REQUIRE the stable "Access Denied" status substring
+# (resilient to edk2 message-wording changes across distros) and — the actual
+# security invariant — FORBID any sign the PBA executed.
 scenario "C: SB enforcing, unsigned PBA -> firmware rejects" \
 	env OVMF_CODE="$OVMF_SECBOOT_CODE" OVMF_VARS="$WORK/vars.secboot.fd" \
-		REQUIRE='Access Denied -- rejected probably by Secure Boot' \
+		REQUIRE='Access Denied' \
 		FORBID='TRUSTED-PBA: start' \
 		python3 "$EXPECT" "$PBA"
 

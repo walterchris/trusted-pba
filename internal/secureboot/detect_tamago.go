@@ -12,6 +12,13 @@ import (
 // Detect reads the firmware Secure Boot state via UEFI Runtime Services. It
 // returns an error rather than guessing if a variable cannot be read, so callers
 // can fail closed.
+//
+// Limitation: go-boot's GetVariable does not surface EFI_NOT_FOUND as a sentinel
+// (it returns an opaque status error), so Detect cannot distinguish "variable
+// absent" (firmware with no Secure Boot support, effectively off) from a genuine
+// read failure — both return an error. A caller that must tell these apart needs
+// an upstream go-boot fix; Phase 3 enforcement should treat any Detect error as
+// "not enforcing" and fail closed.
 func Detect() (State, error) {
 	sb, err := readU8("SecureBoot")
 	if err != nil {
