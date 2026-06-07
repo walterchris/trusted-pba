@@ -125,18 +125,18 @@ func load(target string) error {
 	return nil
 }
 
-// halt stops the machine cleanly: it powers off via ResetSystem (QEMU exits on
-// guest shutdown). If that returns, it hands back to firmware as a last resort.
-//
-// WARNING: Boot.Exit returns control to the UEFI boot manager, which on real
-// hardware proceeds to the NEXT boot option — the "silently continue" behavior the
-// threat model forbids. It is a fallback only; the policy/unlock phases must not
-// rely on it.
+// halt stops the machine. It is reached after a completed chainload AND after any
+// fail-closed decision (policy denial, Secure-Boot-required, unverified target,
+// load failure), so it MUST NOT hand control back to the firmware boot manager —
+// that would proceed to the next boot option, the "silently continue to another
+// boot path" the threat model forbids (CLAUDE.md/AGENTS.md). It powers off via
+// ResetSystem (QEMU exits on guest shutdown); if the firmware ignores that, it
+// stops the CPU here permanently rather than returning via Boot.Exit.
 func halt() {
 	if err := x64.UEFI.Runtime.ResetSystem(uefi.EfiResetShutdown); err != nil {
-		fmt.Fprintf(out, "%s: shutdown failed: %v\r\n", banner, err)
+		fmt.Fprintf(out, "%s: shutdown failed: %v; halting\r\n", banner, err)
 	}
-	if err := x64.UEFI.Boot.Exit(0); err != nil {
-		fmt.Fprintf(out, "%s: exit failed: %v\r\n", banner, err)
+	for {
+		// Dead stop: never return to the firmware boot order.
 	}
 }
