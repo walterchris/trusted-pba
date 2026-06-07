@@ -46,6 +46,9 @@ Work is divided across role agents; **no single agent may implement, approve, an
 release the same change.** Role definitions live in [`.claude/agents/`](.claude/agents/):
 - **Implementation** — writes code within the issue's allowed files.
 - **Test** — adds/validates tests, including negative security tests.
+- **Go Review** — independent Go code-quality review (idiom, errors, interfaces,
+  stdlib reuse, clean code) for any change touching `.go` files; see
+  [`docs/development/go-coding-standards.md`](docs/development/go-coding-standards.md).
 - **Security Review** — independent, adversarial review against the threat model.
 - **Compliance** — updates risk/threat/CRA evidence and traceability.
 - Human **Release Owner** approves release-relevant changes (baseline §5.3).
