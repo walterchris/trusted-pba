@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Boot a Trusted PBA .efi via run-qemu.sh and assert the Phase-0 serial markers.
+"""Boot the Trusted PBA via run-qemu.sh and assert the expected serial markers.
 
-Spawns run-qemu.sh (which builds the ESP and launches QEMU/OVMF with serial on
-stdout), scans the serial stream for the start and success markers within a
-timeout, then tears QEMU down. Exit 0 only if both markers are observed.
+Spawns run-qemu.sh (which builds the ESP — including the chainload test app when
+TESTAPP is set — and launches QEMU/OVMF with serial on stdout), scans the serial
+stream for every REQUIRED marker within a timeout, then tears QEMU down. Exits 0
+only if all required markers are observed.
 
-    expect-serial.py <app.efi>
+    expect-serial.py <pba.efi>
 
-Env: QEMU_TIMEOUT (seconds, default 120).
+Env: QEMU_TIMEOUT (seconds, default 120); TESTAPP (path, forwarded to run-qemu.sh).
 """
 import os
 import re
@@ -19,8 +20,14 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUN = os.path.join(HERE, "run-qemu.sh")
 
-START = re.compile(rb"TRUSTED-PBA: start")
-SUCCESS = re.compile(rb"TRUSTED-PBA: phase-0 skeleton ok")
+# Markers that must all appear on serial for the run to pass. Phase 1 proves the
+# full chainload path: the PBA starts, the chainloaded test app runs, and control
+# returns to the PBA.
+REQUIRED = (
+    re.compile(rb"TRUSTED-PBA: start"),
+    re.compile(rb"TEST-APP: ok"),
+    re.compile(rb"TRUSTED-PBA: chainload returned"),
+)
 TIMEOUT = float(os.environ.get("QEMU_TIMEOUT", "120"))
 
 
@@ -36,7 +43,7 @@ def _on_alarm(_signum, _frame):
 
 def main() -> int:
     if len(sys.argv) != 2:
-        sys.exit("usage: expect-serial.py <app.efi>")
+        sys.exit("usage: expect-serial.py <pba.efi>")
     app = sys.argv[1]
     if not os.path.isfile(app):
         sys.exit(f"not found: {app}")
@@ -48,7 +55,7 @@ def main() -> int:
         preexec_fn=os.setsid,  # own process group so we can kill QEMU's tree
     )
     deadline = time.monotonic() + TIMEOUT
-    seen_start = seen_ok = False
+    seen = set()
     buf = b""
     # Hard wall-clock guard: fires even if QEMU emits no further bytes (blocking
     # readline). A couple of seconds of slack over the soft deadline below.
@@ -59,11 +66,8 @@ def main() -> int:
             sys.stdout.buffer.write(line)
             sys.stdout.flush()
             buf += line
-            if START.search(buf):
-                seen_start = True
-            if SUCCESS.search(buf):
-                seen_ok = True
-            if seen_start and seen_ok:
+            seen = {m.pattern for m in REQUIRED if m.search(buf)}
+            if len(seen) == len(REQUIRED):
                 break
             if time.monotonic() > deadline:
                 print("\n[expect-serial] FAIL: timeout", flush=True)
@@ -84,10 +88,11 @@ def main() -> int:
             except ProcessLookupError:
                 pass
 
-    if seen_start and seen_ok:
-        print("[expect-serial] PASS: start + phase-0 markers observed")
+    missing = [m.pattern.decode() for m in REQUIRED if m.pattern not in seen]
+    if not missing:
+        print("[expect-serial] PASS: all markers observed")
         return 0
-    print(f"[expect-serial] FAIL: start={seen_start} ok={seen_ok}")
+    print(f"[expect-serial] FAIL: missing markers: {missing}")
     return 1
 
 

@@ -11,6 +11,8 @@
 #   run-qemu.sh <app.efi>
 #
 # OVMF firmware paths can be overridden via OVMF_CODE / OVMF_VARS.
+# If TESTAPP=<path> is set, that image is staged at /EFI/TEST/TESTAPP.EFI so the
+# booted app can chainload it.
 
 set -euo pipefail
 
@@ -47,6 +49,12 @@ truncate -s 64M "$IMG"
 mformat -i "$IMG" -F ::
 mmd -i "$IMG" ::/EFI ::/EFI/BOOT
 mcopy -i "$IMG" "$APP" ::/EFI/BOOT/BOOTX64.EFI
+
+# Optional second-stage image the booted app chainloads (Phase 1: the test app).
+if [ -n "${TESTAPP:-}" ]; then
+	mmd -i "$IMG" ::/EFI/TEST
+	mcopy -i "$IMG" "$TESTAPP" ::/EFI/TEST/TESTAPP.EFI
+fi
 
 # Per-run writable copy of the NVRAM variable store.
 cp "$OVMF_VARS" "$VARS"
