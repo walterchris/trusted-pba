@@ -1,0 +1,89 @@
+# Taskfile for Trusted PBA — convenience wrapper for setup/build/run/test.
+# Install go-task: https://taskfile.dev/installation/   Then: `task setup && task run`.
+#
+# Build logic lives in the Makefile (single source of truth); these tasks delegate
+# to it. The added value here is `setup`, which installs the pinned TamaGo toolchain.
+#
+# TamaGo location resolves from $TAMAGO (an existing toolchain) if set, else a
+# managed install under $TAMAGO_ROOT (default ~/.tamago/<version>).
+version: '3'
+
+vars:
+  TAMAGO_VERSION: go1.26.4
+  TAMAGO_ROOT:
+    sh: echo "${TAMAGO_ROOT:-$HOME/.tamago/{{.TAMAGO_VERSION}}}"
+  TAMAGO_BIN:
+    sh: echo "${TAMAGO:-{{.TAMAGO_ROOT}}/bin/go}"
+
+env:
+  # Exported so the delegated Makefile targets pick up the toolchain.
+  TAMAGO: '{{.TAMAGO_BIN}}'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  setup:
+    desc: 'One-time setup: install the TamaGo toolchain (if missing) and resolve deps'
+    cmds:
+      - task: toolchain
+      - task: deps
+
+  toolchain:
+    desc: Install the pinned TamaGo toolchain (go1.26.4, linux/amd64) under $TAMAGO_ROOT (~/.tamago by default)
+    status:
+      - test -x "{{.TAMAGO_BIN}}"
+    cmds:
+      - mkdir -p "{{.TAMAGO_ROOT}}"
+      - curl -fsSL -o /tmp/tamago-{{.TAMAGO_VERSION}}.tar.gz https://github.com/usbarmory/tamago-go/releases/download/{{.TAMAGO_VERSION}}/tamago-{{.TAMAGO_VERSION}}.linux-amd64.tar.gz
+      # Tarball uses absolute paths (usr/local/tamago-go/...); strip them so the
+      # toolchain lands directly under TAMAGO_ROOT (TAMAGO_ROOT/bin/go).
+      - tar -xzf /tmp/tamago-{{.TAMAGO_VERSION}}.tar.gz -C "{{.TAMAGO_ROOT}}" --strip-components=3
+      - '"{{.TAMAGO_BIN}}" version'
+
+  deps:
+    desc: Resolve and pin Go module dependencies (go-boot, tamago)
+    cmds:
+      - make deps
+
+  build:
+    desc: Build bin/trusted-pba.efi
+    cmds:
+      - make build
+
+  run:
+    desc: Build and boot trusted-pba.efi in QEMU/OVMF (asserts serial markers)
+    aliases: [qemu]
+    cmds:
+      - make qemu
+
+  test:
+    desc: Run host Go tests
+    cmds:
+      - make test
+
+  vet:
+    desc: Run go vet on host packages
+    cmds:
+      - go vet ./...
+
+  fmt:
+    desc: Format Go sources (gofmt -w)
+    cmds:
+      - gofmt -l -w .
+
+  check:
+    desc: 'Local CI: vet + host tests + build + QEMU smoke'
+    cmds:
+      - task: vet
+      - task: test
+      - task: build
+      - task: run
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - make clean
