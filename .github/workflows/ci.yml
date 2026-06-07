@@ -122,11 +122,23 @@ jobs:
 
   secureboot-matrix:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Secure Boot matrix (placeholder — #PHASE2)
+      - name: Install QEMU, OVMF, mtools, gnu-efi, sbsigntool, openssl/uuid
         run: |
-          echo "TODO: signed/unsigned/untrusted/revoked x SB on/off; negative cases fail closed"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 ovmf mtools gnu-efi sbsigntool openssl uuid-runtime python3-pip
+      - name: Install virt-firmware (virt-fw-vars)
+        run: pip install --user --break-system-packages virt-firmware
+      - name: Install go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Secure Boot matrix (SB off / enforcing-signed / enforcing-unsigned-rejected)
+        run: task sb-matrix
 
   mock-opal-integration:
     runs-on: ubuntu-latest

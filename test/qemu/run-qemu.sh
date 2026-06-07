@@ -18,25 +18,16 @@ set -euo pipefail
 
 APP="${1:?usage: run-qemu.sh <app.efi>}"
 
-# Locate OVMF firmware across common distro layouts (Fedora, Debian/Ubuntu).
-find_fw() {
-	local override="$1"; shift
-	local c
-	for c in "$override" "$@"; do
-		[ -n "$c" ] && [ -f "$c" ] && { echo "$c"; return 0; }
-	done
-	return 1
-}
-OVMF_CODE="$(find_fw "${OVMF_CODE:-}" \
-	/usr/share/OVMF/OVMF_CODE.fd \
-	/usr/share/edk2/ovmf/OVMF_CODE.fd \
-	/usr/share/OVMF/OVMF_CODE_4M.fd \
-	/usr/share/qemu/OVMF_CODE.fd)" || { echo "OVMF_CODE.fd not found; set OVMF_CODE" >&2; exit 2; }
-OVMF_VARS="$(find_fw "${OVMF_VARS:-}" \
-	/usr/share/OVMF/OVMF_VARS.fd \
-	/usr/share/edk2/ovmf/OVMF_VARS.fd \
-	/usr/share/OVMF/OVMF_VARS_4M.fd \
-	/usr/share/qemu/OVMF_VARS.fd)" || { echo "OVMF_VARS.fd not found; set OVMF_VARS" >&2; exit 2; }
+# Resolve OVMF firmware. Default to the secure-boot-capable build (its enforcement
+# is inert in Setup Mode, so unsigned images still boot, and the SecureBoot UEFI
+# variable then exists for the PBA to read). Override OVMF_CODE/OVMF_VARS to pick a
+# specific pair — the Secure Boot matrix does this (enrolled VARS + signed images).
+HERE_RQ="$(dirname "$(readlink -f "$0")")"
+. "$HERE_RQ/ovmf-pair.sh"
+OVMF_CODE="${OVMF_CODE:-$OVMF_SECBOOT_CODE}"
+OVMF_VARS="${OVMF_VARS:-$OVMF_VARS_TEMPLATE}"
+[ -f "$OVMF_CODE" ] || { echo "OVMF_CODE not found: $OVMF_CODE" >&2; exit 2; }
+[ -f "$OVMF_VARS" ] || { echo "OVMF_VARS not found: $OVMF_VARS" >&2; exit 2; }
 
 WORK="$(mktemp -d)"
 cleanup() { rm -rf "$WORK"; }
