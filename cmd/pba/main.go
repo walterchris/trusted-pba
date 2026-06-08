@@ -22,7 +22,6 @@ import (
 
 	"github.com/usbarmory/go-boot/uefi"
 	"github.com/usbarmory/go-boot/uefi/x64"
-	"github.com/walterchris/trusted-pba/internal/boottime"
 	"github.com/walterchris/trusted-pba/internal/policy"
 	"github.com/walterchris/trusted-pba/internal/secureboot"
 	"github.com/walterchris/trusted-pba/internal/truststore"
@@ -132,7 +131,7 @@ func verifyAndLoad(target string) error {
 	if err != nil {
 		return fmt.Errorf("chainload failed: trust store: %w", err)
 	}
-	if err := store.Verifier(boottime.Now()).Verify(image); err != nil {
+	if err := store.Verifier().Verify(image); err != nil {
 		return fmt.Errorf("chainload failed: verify %q: %w", target, err)
 	}
 	fmt.Fprintf(out, "%s: pba-verified %s (trust set %s)\r\n", banner, target, truststore.TrustSet)

@@ -18,7 +18,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/foxboron/go-uefi/efi/signature"
 	"github.com/walterchris/trusted-pba/internal/imageverify"
@@ -29,8 +28,8 @@ var dbxUpdate []byte
 
 // Store is the parsed embedded trust material.
 type Store struct {
-	// DB is the pool of trusted CA certificates (db).
-	DB *x509.CertPool
+	// DB is the trusted CA certificates (db) a valid signer must chain to.
+	DB []*x509.Certificate
 	// DBXHashes is the set of revoked Authenticode SHA-256 digests, hex-encoded (dbx).
 	DBXHashes map[string]struct{}
 	// DBXCerts is the list of revoked certificates (dbx).
@@ -41,13 +40,13 @@ type Store struct {
 // Store. It fails closed: any malformed material is an error, never a silently
 // smaller trust store.
 func Load() (*Store, error) {
-	pool := x509.NewCertPool()
+	var db []*x509.Certificate
 	for i, der := range dbCerts() {
 		cert, err := x509.ParseCertificate(der)
 		if err != nil {
 			return nil, fmt.Errorf("truststore: parse db cert %d: %w", i, err)
 		}
-		pool.AddCert(cert)
+		db = append(db, cert)
 	}
 
 	hashes, certs, err := parseDBX(dbxUpdate)
@@ -61,17 +60,16 @@ func Load() (*Store, error) {
 		return nil, errors.New("truststore: dbx parsed to no revocations")
 	}
 
-	return &Store{DB: pool, DBXHashes: hashes, DBXCerts: certs}, nil
+	return &Store{DB: db, DBXHashes: hashes, DBXCerts: certs}, nil
 }
 
-// Verifier returns an imageverify.Verifier backed by this store, using now as the
-// X.509 validity time (the caller supplies an RTC reading or build-time floor).
-func (s *Store) Verifier(now time.Time) *imageverify.Verifier {
+// Verifier returns an imageverify.Verifier backed by this store. Image acceptance
+// is time-independent (see imageverify / ADR-0007), so no clock is supplied.
+func (s *Store) Verifier() *imageverify.Verifier {
 	return &imageverify.Verifier{
 		Roots:     s.DB,
 		DBXHashes: s.DBXHashes,
 		DBXCerts:  s.DBXCerts,
-		Now:       now,
 	}
 }
 

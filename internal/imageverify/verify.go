@@ -4,8 +4,16 @@
 // a second-stage trust broker: verify a target (e.g. Windows Boot Manager) on its
 // own, independent of — or in addition to — firmware Secure Boot.
 //
+// Like firmware Secure Boot, image acceptance does NOT depend on wall-clock time:
+// the trust decision is membership of the signer's chain in db plus the absence of
+// any chain certificate (or the image hash) from dbx. Signing-certificate validity
+// periods are deliberately ignored — Microsoft's image-signing leaves are
+// short-lived and routinely expired, yet the signed image must keep booting, and
+// pre-boot firmware has no reliable clock. See ADR-0007; timestamp-countersignature
+// validation is tracked as future research (#48).
+//
 // This package is pure Go (no UEFI calls), so it is host-testable and also builds
-// under TamaGo. The trust material and current time are injected by the caller.
+// under TamaGo. The trust material is injected by the caller.
 package imageverify
 
 import (
@@ -24,19 +32,15 @@ import (
 // materials (production) or test materials (tests).
 type Verifier struct {
 	// Roots is the db: CA certificates a valid signer must chain to.
-	Roots *x509.CertPool
+	Roots []*x509.Certificate
 	// DBXHashes is the dbx by image: revoked Authenticode SHA-256 digests, hex-encoded.
 	DBXHashes map[string]struct{}
 	// DBXCerts is the dbx by certificate: revoked signer/CA certificates.
 	DBXCerts []*x509.Certificate
-	// Now is the time used for X.509 validity (the caller supplies an RTC reading
-	// or a build-time floor; see ADR-0007).
-	Now time.Time
 }
 
 // Verification errors. Any non-nil error from Verify means "do not boot".
 var (
-	ErrNoTime      = errors.New("imageverify: no verification time set")
 	ErrParse       = errors.New("imageverify: cannot parse PE image")
 	ErrNoSignature = errors.New("imageverify: image has no usable signature")
 	ErrRevokedHash = errors.New("imageverify: image hash is revoked (dbx)")
@@ -49,14 +53,6 @@ var (
 // signature binds that hash, the signer chains to a db CA, and no certificate in
 // the chain is revoked by dbx. Any error means fail closed.
 func (v *Verifier) Verify(image []byte) error {
-	// Fail closed if the caller supplied no time: a zero CurrentTime makes the
-	// stdlib silently substitute time.Now(), which pre-boot is unreliable and
-	// would validate against an attacker-influenced clock. The caller must pass
-	// an RTC reading or the build-time floor (ADR-0007).
-	if v.Now.IsZero() {
-		return ErrNoTime
-	}
-
 	pe, err := authenticode.Parse(bytes.NewReader(image))
 	if err != nil {
 		return errors.Join(ErrParse, err)
@@ -79,6 +75,12 @@ func (v *Verifier) Verify(image []byte) error {
 		return ErrNoSignature
 	}
 
+	// db roots, with validity periods neutralized (see ignoreValidity / package doc).
+	roots := x509.NewCertPool()
+	for _, c := range v.Roots {
+		roots.AddCert(ignoreValidity(c))
+	}
+
 	// For each embedded signature, find the leaf signer (the cert whose key the
 	// signature verifies against) and chain it to db, applying dbx by certificate.
 	for _, sig := range sigs {
@@ -98,16 +100,16 @@ func (v *Verifier) Verify(image []byte) error {
 			intermediates := x509.NewCertPool()
 			for _, c := range certs {
 				if !c.Equal(leaf) {
-					intermediates.AddCert(c)
+					intermediates.AddCert(ignoreValidity(c))
 				}
 			}
-			chains, err := leaf.Verify(x509.VerifyOptions{
-				Roots:         v.Roots,
+			chains, err := ignoreValidity(leaf).Verify(x509.VerifyOptions{
+				Roots:         roots,
 				Intermediates: intermediates,
-				CurrentTime:   v.Now,
 				// Require code-signing EKU (ADR-0007 §3 step 3): a non-code-signing
 				// cert (e.g. TLS serverAuth) that happens to chain to db must not
-				// be allowed to boot an image.
+				// be allowed to boot an image. CurrentTime is left unset because
+				// every certificate's validity has been neutralized.
 				KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
 			})
 			if err != nil {
@@ -124,6 +126,19 @@ func (v *Verifier) Verify(image []byte) error {
 		}
 	}
 	return ErrUntrusted
+}
+
+// ignoreValidity returns a copy of c whose validity period spans all time. UEFI
+// Secure Boot does not reject an image because its signing certificate's validity
+// window has lapsed (firmware has no reliable clock; Microsoft's image-signing
+// leaves are short-lived and routinely expired), and we mirror that. The copy
+// shares the original signed bytes (RawTBSCertificate/Signature/PublicKey), so the
+// chain, EKU, and dbx checks are unaffected — only the time check is neutralized.
+func ignoreValidity(c *x509.Certificate) *x509.Certificate {
+	cp := *c
+	cp.NotBefore = time.Time{}
+	cp.NotAfter = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
+	return &cp
 }
 
 // revoked reports whether c appears in the dbx certificate list.
