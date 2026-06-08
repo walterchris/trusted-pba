@@ -58,11 +58,21 @@ artifact; `truststore` strips its `EFI_VARIABLE_AUTHENTICATION_2` header and par
 the revoked image hashes (it trusts the pinned, hash-recorded blob rather than
 re-verifying the update's PKCS#7).
 
-**Time policy:** chain validity is checked against the platform **RTC** (read via
-go-boot's `x64.RTC`), **clamped to a compiled-in build-time floor** (`internal/boottime`):
-a failed read or a reading earlier than the floor (an unset/garbage pre-boot clock)
-falls back to the floor, so validity is never checked against an attacker-influenced
-earlier time. A zero/unset time fails closed in `imageverify` (`ErrNoTime`).
+**Time policy — signing-cert validity is NOT enforced (matches firmware).** Like
+UEFI Secure Boot, image acceptance is **time-independent**: the trust decision is
+the signer chaining to `db` plus the absence of any chain certificate (or the image
+hash) from `dbx`. Signing-certificate **validity periods are deliberately ignored**
+(`imageverify.ignoreValidity`). This is required for real-world booting: Microsoft's
+image-signing **leaves are short-lived (~1 year) and routinely expired** (e.g. shim
+15.8's leaf expired 2024-10; the Microsoft Corporation UEFI CA 2011 itself expires
+2026-06-27), yet the signed images must keep booting, and pre-boot firmware has no
+reliable clock. Enforcing current-time validity rejected every genuine Windows/shim
+image (surfaced while validating a real Microsoft-signed shim). The control for a
+compromised-but-expired key is **`dbx` revocation**, not expiry — exactly as
+firmware does. **Open research (#48):** optionally validate an Authenticode
+**timestamp countersignature** (cert valid *at signing time*) when present. This
+supersedes the earlier RTC-clamped-to-build-floor design (the `internal/boottime`
+package and `imageverify`'s `Now`/`ErrNoTime` were removed accordingly).
 (Documented here because it is a security-behavior choice.)
 
 ### Scope boundary
@@ -86,8 +96,10 @@ enforcement gate. Risks: correctness of Authenticode hashing/`dbx` (mitigated by
 differential tests vs `sbverify`/relic and required negative tests — tampered image,
 untrusted chain, `dbx` hash hit); trust-anchor **staleness** (2011 vs 2023 CAs, and
 `dbx` updates) — embedded materials are pinned and refreshed via an ADR-gated
-process; pre-boot time trust (RTC vs floor). The threat model (#4) and risk
-assessment (#5) must capture the second-stage-verification asset and these risks.
+process; and **ignoring signing-cert expiry** (matches firmware; the control is
+`dbx` revocation, not validity — see Time policy and research #48). The threat model
+(#4) and risk assessment (#5) must capture the second-stage-verification asset and
+these risks.
 
 ## Compliance Impact
 §5.3 human gate (boot-chain validation) + §23 ADR satisfied by approving this.
@@ -97,10 +109,20 @@ materials are public (no secrets); no private keys committed.
 
 ## Test Impact
 Host unit + **fuzz** for policy parse (fail-closed) and verifier, using a
-**self-signed test CA** (CI-deterministic): accept; negatives that must fail closed
-(tampered hash, untrusted chain, `dbx` hash hit); plus an *optional* real
-`bootmgfw.efi` check (not committed). QEMU matrix: pba-accept / pba-reject / revoked
-/ firmware-defer / policy-error → fail closed.
+**self-signed test CA** (CI-deterministic): accept; expired-signer-accepted (firmware
+semantics); negatives that must fail closed (tampered hash, untrusted chain, `dbx`
+hash hit, non-code-signing EKU, revoked intermediate). QEMU `pba-matrix`: pba-accept
+(test-CA-signed fixture) / pba-reject (unsigned) → fail closed (firmware-defer +
+policy-error covered by existing matrices). **Real-image test** (`real-image-verify`
+CI job): a genuine Microsoft-signed **shim** (Ubuntu `shim-signed`, not committed) is
+accepted by the full trust set and rejected by the windows-only default — proving the
+embedded CAs validate a real third-party image and the trust-set boundary holds.
+
+**Coverage gap — real Windows boot:** we do not boot a real Windows Boot Manager
+(`bootmgfw.efi`) — it is proprietary (cannot commit/redistribute) and needs a full
+licensed Windows disk + BCD to reach the OS. The shim test covers "verify a real
+Microsoft-signed loader"; booting actual Windows is a manual/hardware validation
+step. Tracked alongside the test-tooling plan.
 
 ## Rollback Plan
 Revert the policy wiring in `cmd/pba/main.go`; the PBA falls back to the Phase 1/2

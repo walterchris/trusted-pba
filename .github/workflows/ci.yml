@@ -129,6 +129,26 @@ jobs:
           name: qemu-serial-log
           path: qemu-serial.log
 
+  real-image-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install a real Microsoft-signed shim (shim-signed)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends shim-signed
+      - name: Verify a genuine Microsoft-signed image (full accepts / windows-only rejects)
+        run: |
+          shim=$(ls /usr/lib/shim/shimx64.efi.signed.latest \
+                    /usr/lib/shim/shimx64.efi.signed \
+                    /usr/lib/shim/shim.efi.signed 2>/dev/null | head -1)
+          if [ -z "$shim" ]; then echo "no signed shim found in /usr/lib/shim" >&2; exit 1; fi
+          echo "using shim: $shim"
+          TPBA_REAL_SHIM="$shim" go test ./internal/truststore/ -run TestRealMicrosoftSignedImage -v
+
   pba-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 20

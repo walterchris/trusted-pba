@@ -18,9 +18,6 @@ import (
 	"github.com/foxboron/go-uefi/pkcs7"
 )
 
-// verifyTime is within every test certificate's validity window.
-var verifyTime = time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
-
 type ca struct {
 	cert *x509.Certificate
 	key  *rsa.PrivateKey
@@ -61,6 +58,13 @@ func (c ca) leaf(t *testing.T, cn string) (*x509.Certificate, *rsa.PrivateKey) {
 // leafEKU issues a leaf cert + key signed by the CA with the given extended key usage.
 func (c ca) leafEKU(t *testing.T, cn string, eku x509.ExtKeyUsage) (*x509.Certificate, *rsa.PrivateKey) {
 	t.Helper()
+	return c.leafValidity(t, cn, eku, time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC))
+}
+
+// leafValidity issues a leaf cert + key with an explicit validity window so tests
+// can exercise expired signers.
+func (c ca) leafValidity(t *testing.T, cn string, eku x509.ExtKeyUsage, notBefore, notAfter time.Time) (*x509.Certificate, *rsa.PrivateKey) {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -68,8 +72,8 @@ func (c ca) leafEKU(t *testing.T, cn string, eku x509.ExtKeyUsage) (*x509.Certif
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: cn},
-		NotBefore:    time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
-		NotAfter:     time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotBefore:    notBefore,
+		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{eku},
 	}
@@ -111,14 +115,6 @@ func (c ca) intermediate(t *testing.T, cn string) ca {
 	return ca{cert, key}
 }
 
-func pool(certs ...*x509.Certificate) *x509.CertPool {
-	p := x509.NewCertPool()
-	for _, c := range certs {
-		p.AddCert(c)
-	}
-	return p
-}
-
 // signFixture signs the PE fixture with leafKey/leafCert, embedding extra certs
 // (e.g. the issuing CA) so a verifier can build the chain.
 func signFixture(t *testing.T, leafKey *rsa.PrivateKey, leafCert *x509.Certificate, extra ...*x509.Certificate) []byte {
@@ -151,9 +147,26 @@ func TestVerifyAccepts(t *testing.T) {
 	leafCert, leafKey := root.leaf(t, "Test Signer")
 	signed := signFixture(t, leafKey, leafCert, root.cert)
 
-	v := &Verifier{Roots: pool(root.cert), Now: verifyTime}
+	v := &Verifier{Roots: []*x509.Certificate{root.cert}}
 	if err := v.Verify(signed); err != nil {
 		t.Fatalf("expected accept, got %v", err)
+	}
+}
+
+// TestVerifyAcceptsExpiredSigner asserts the firmware-matching policy: a signer
+// whose validity window has lapsed must still verify, because UEFI Secure Boot does
+// not gate on signing-cert expiry (real Microsoft image-signing leaves are routinely
+// expired). See ADR-0007.
+func TestVerifyAcceptsExpiredSigner(t *testing.T) {
+	root := newCA(t, "Test db CA")
+	expired := time.Date(2021, 1, 1, 0, 0, 0, 0, time.UTC)
+	leafCert, leafKey := root.leafValidity(t, "Expired Signer", x509.ExtKeyUsageCodeSigning,
+		time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), expired)
+	signed := signFixture(t, leafKey, leafCert, root.cert)
+
+	v := &Verifier{Roots: []*x509.Certificate{root.cert}}
+	if err := v.Verify(signed); err != nil {
+		t.Fatalf("expired signer must still be accepted (firmware semantics), got %v", err)
 	}
 }
 
@@ -166,14 +179,14 @@ func TestVerifyFailsClosed(t *testing.T) {
 	t.Run("tampered image", func(t *testing.T) {
 		bad := bytes.Clone(signed)
 		bad[len(bad)/3] ^= 0xff // mutate hashed content
-		v := &Verifier{Roots: pool(root.cert), Now: verifyTime}
+		v := &Verifier{Roots: []*x509.Certificate{root.cert}}
 		if err := v.Verify(bad); err == nil {
 			t.Fatal("tampered image must be rejected")
 		}
 	})
 
 	t.Run("untrusted root", func(t *testing.T) {
-		v := &Verifier{Roots: pool(other.cert), Now: verifyTime}
+		v := &Verifier{Roots: []*x509.Certificate{other.cert}}
 		if err := v.Verify(signed); !errors.Is(err, ErrUntrusted) {
 			t.Fatalf("want ErrUntrusted, got %v", err)
 		}
@@ -181,7 +194,7 @@ func TestVerifyFailsClosed(t *testing.T) {
 
 	t.Run("unsigned image", func(t *testing.T) {
 		raw, _ := os.ReadFile("testdata/sample-pe.bin")
-		v := &Verifier{Roots: pool(root.cert), Now: verifyTime}
+		v := &Verifier{Roots: []*x509.Certificate{root.cert}}
 		if err := v.Verify(raw); !errors.Is(err, ErrNoSignature) {
 			t.Fatalf("want ErrNoSignature, got %v", err)
 		}
@@ -189,9 +202,8 @@ func TestVerifyFailsClosed(t *testing.T) {
 
 	t.Run("revoked by image hash (dbx)", func(t *testing.T) {
 		v := &Verifier{
-			Roots:     pool(root.cert),
+			Roots:     []*x509.Certificate{root.cert},
 			DBXHashes: map[string]struct{}{imageHash(t, signed): {}},
-			Now:       verifyTime,
 		}
 		if err := v.Verify(signed); !errors.Is(err, ErrRevokedHash) {
 			t.Fatalf("want ErrRevokedHash, got %v", err)
@@ -199,7 +211,7 @@ func TestVerifyFailsClosed(t *testing.T) {
 	})
 
 	t.Run("revoked by signer cert (dbx)", func(t *testing.T) {
-		v := &Verifier{Roots: pool(root.cert), DBXCerts: []*x509.Certificate{root.cert}, Now: verifyTime}
+		v := &Verifier{Roots: []*x509.Certificate{root.cert}, DBXCerts: []*x509.Certificate{root.cert}}
 		if err := v.Verify(signed); !errors.Is(err, ErrRevokedCert) {
 			t.Fatalf("want ErrRevokedCert, got %v", err)
 		}
@@ -210,16 +222,9 @@ func TestVerifyFailsClosed(t *testing.T) {
 		// not be allowed to boot, even though the chain is otherwise valid.
 		tlsCert, tlsKey := root.leafEKU(t, "TLS Server", x509.ExtKeyUsageServerAuth)
 		tlsSigned := signFixture(t, tlsKey, tlsCert, root.cert)
-		v := &Verifier{Roots: pool(root.cert), Now: verifyTime}
+		v := &Verifier{Roots: []*x509.Certificate{root.cert}}
 		if err := v.Verify(tlsSigned); !errors.Is(err, ErrUntrusted) {
 			t.Fatalf("want ErrUntrusted, got %v", err)
-		}
-	})
-
-	t.Run("no verification time", func(t *testing.T) {
-		v := &Verifier{Roots: pool(root.cert)} // Now is zero
-		if err := v.Verify(signed); !errors.Is(err, ErrNoTime) {
-			t.Fatalf("want ErrNoTime, got %v", err)
 		}
 	})
 
@@ -230,9 +235,8 @@ func TestVerifyFailsClosed(t *testing.T) {
 		leafCert2, leafKey2 := inter.leaf(t, "Sub Signer")
 		subSigned := signFixture(t, leafKey2, leafCert2, inter.cert, root.cert)
 		v := &Verifier{
-			Roots:    pool(root.cert),
+			Roots:    []*x509.Certificate{root.cert},
 			DBXCerts: []*x509.Certificate{inter.cert},
-			Now:      verifyTime,
 		}
 		if err := v.Verify(subSigned); !errors.Is(err, ErrRevokedCert) {
 			t.Fatalf("want ErrRevokedCert, got %v", err)

@@ -2,7 +2,6 @@ package truststore
 
 import (
 	"testing"
-	"time"
 )
 
 func TestLoad(t *testing.T) {
@@ -10,8 +9,8 @@ func TestLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if store.DB == nil {
-		t.Fatal("nil db pool")
+	if len(store.DB) == 0 {
+		t.Fatal("empty db")
 	}
 	// The dbx amd64 update revokes many image hashes; sanity-check it is non-empty
 	// so a parsing regression that silently drops revocations is caught.
@@ -26,9 +25,8 @@ func TestVerifierWired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	now := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
-	v := store.Verifier(now)
-	if v.Roots != store.DB || !v.Now.Equal(now) {
+	v := store.Verifier()
+	if len(v.Roots) != len(store.DB) || len(v.DBXHashes) != len(store.DBXHashes) {
 		t.Fatal("verifier not wired to store")
 	}
 }
