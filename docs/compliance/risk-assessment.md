@@ -27,14 +27,14 @@ secret).
 | ID | Risk | Asset | C/I/A | Likelihood | Severity | Residual | Status |
 |---|---|---|---|---|---|---|---|
 | R-001 | PBA accepts an untrusted EFI image | A6/A5 | I | Medium | Critical | **Low** | Mitigated (imageverify) |
-| R-002 | PBA unlocks SED before authentication succeeds | A1/A7 | C/I | Medium | Critical | **High** | Open — Phase 4–6 |
-| R-003 | Unlock secret leaks through logs | A1 | C | Medium | Critical | **High** | Open — Phase 4–6 (rule defined) |
+| R-002 | PBA unlocks SED before authentication succeeds | A1/A7 | C/I | Medium | Critical | **Medium** | Library fail-closed; wiring Phase 5/6 |
+| R-003 | Unlock secret leaks through logs | A1 | C | Medium | Critical | **Medium** | No secret logged; zeroize/scrub TODO |
 | R-004 | Attacker modifies PBA policy file | A3 | I | Low | High | **Low** | Mitigated (compiled-in, fail-closed) |
 | R-005 | Rollback to a vulnerable PBA version | A2/A5 | I | Medium | Critical | **High** | Open — anti-rollback not built |
 | R-006 | Malicious update accepted | A8/A2/A5 | I | Medium | Critical | **High** | Open — update/signing not built |
 | R-007 | Windows Boot Manager chainload fails after unlock | A6 | A | Medium | High | **Medium** | Partial — virtual only |
 | R-008 | MBRDone does not take effect until reboot | A7 | A/I | Medium | High | **Medium** | Open — Phase 6/8 |
-| R-009 | Opal/PE command parser accepts malformed response | A7/A6 | I/A | Medium | High | **Low (PE) / High (Opal)** | Partial |
+| R-009 | Opal/PE command parser accepts malformed response | A7/A6 | I/A | Medium | High | **Low** | Mitigated (parsers fuzzed, fail closed) |
 | R-010 | QEMU tests pass but real SED differs | — | I/A | High | High | **Medium** | Open — Phase 8 |
 | R-011 | Embedded trust anchors go stale (2011 CAs expire 2026-06-27) | A5 | I/A | High | High | **Medium** | Open — ADR-gated refresh |
 | R-012 | TOCTOU: target re-read after verification (SB-off) | A6 | I | Low | High | **Low** | Open — #46 |
@@ -57,16 +57,23 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 
 ### R-002 — PBA unlocks SED before authentication succeeds
 - **Threat/path:** logic error unlocks the drive when auth failed/was skipped.
-- **Mitigations (planned):** fail-closed unlock sequencing in Phase 4–6; do not
-  unlock on auth failure; do not chainload on unlock failure (baseline §11).
-- **Residual:** High (unimplemented). **Tests:** planned (mock Opal). **Owner:** Security Owner.
+- **Mitigations:** Phase 4 `internal/opal` unlock flow is fail-closed by
+  construction — `Set` (range unlock / MBRDone) requires an authenticated session,
+  and wrong PIN / non-success status / transport error abort before any unlock, so
+  the drive stays locked (verified by the negative-test matrix). **Not yet wired
+  into the boot path** (Phase 5/6) and not yet validated on hardware (Phase 8).
+- **Residual:** Medium — library is fail-closed; end-to-end wiring + hardware
+  pending. **Tests:** `TestUnlockHappyPath`, `TestUnlockFailsClosed/*`.
+  **Evidence:** ADR-0004. **Owner:** Security Owner.
 
 ### R-003 — Unlock secret leaks through logs
 - **Threat/path:** secret/PIN/session data written to console/serial.
 - **Mitigations:** "never log secrets" is a non-negotiable rule (CLAUDE.md,
-  baseline §11); current console output prints only banners/markers (no secret
-  handled yet). Phase 4–6 must add buffer zeroization + log review.
-- **Residual:** High until unlock exists. **Tests:** planned (log-scrub assertion).
+  baseline §11); `internal/opal` logs nothing (it returns errors without the PIN/
+  session material). Buffer zeroization + a log-scrub assertion are still TODO for
+  the Phase 5/6 wiring.
+- **Residual:** Medium — no secret is logged today, but zeroization/scrub tests are
+  pending. **Tests:** planned (log-scrub assertion). **Evidence:** ADR-0004.
 
 ### R-004 — Attacker modifies PBA policy file
 - **Threat/path:** tamper with the boot policy to redirect/relax validation.
@@ -102,17 +109,22 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 
 ### R-008 — MBRDone does not take effect until reboot
 - **Threat/path:** Shadow-MBR remains visible after unlock, OS reads wrong data.
-- **Mitigations (planned):** Phase 6 MBRControl handling + hardware validation.
-- **Residual:** Medium. **Tests:** planned (mock + hardware).
+- **Mitigations:** Phase 4 sets `MBRControl.Done` as part of the unlock flow (the
+  mock reflects it in discovery); real MBRDone timing/visibility needs hardware
+  validation (Phase 6/8).
+- **Residual:** Medium. **Tests:** `TestUnlockHappyPath` (asserts MBRDone set);
+  hardware planned.
 
 ### R-009 — Opal/PE command parser accepts malformed response
 - **Threat/path:** malformed device/image input drives the parser into an unsafe
   state or panic.
 - **Mitigations:** PE/Authenticode + dbx parsing fail closed and never panic on
   attacker input (`ErrParse`; `stripAuth2` bounds-checked); policy parser fuzzed.
-  Opal response parsing (Phase 4) **must be fuzzed** before merge.
-- **Residual:** Low for PE/policy today; High for Opal until built. **Tests:**
-  `TestStripAuth2Rejects`, `FuzzParse`, `TestVerifyFailsClosed/tampered`.
+  Opal response parsing (token/packet/discovery/method) now fails closed and is
+  fuzzed (`FuzzResponseParse`), satisfying baseline §12.
+- **Residual:** Low. **Tests:** `TestStripAuth2Rejects`, `FuzzParse`,
+  `FuzzResponseParse`, `TestTokenizeFailsClosed`, `TestDecodePacketFailsClosed`,
+  `TestParseDiscoveryFailsClosed`, `TestVerifyFailsClosed/tampered`.
 
 ### R-010 — QEMU tests pass but real SED differs
 - **Threat/path:** behavioral gap between mock/QEMU and real hardware causes an
@@ -154,3 +166,4 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 | Date | Change |
 |---|---|
 | 2026-06-08 | Initial risk assessment (#5): R-001..R-010 from baseline §9 plus R-011 (trust-anchor staleness), R-012 (SB-off TOCTOU, #46), R-013 (ignore-expiry, ADR-0007/#48). Reflects Phase 3 mitigations. |
+| 2026-06-08 | Phase 4 (Opal unlock library + simulator, ADR-0004): R-009 → Low (Opal response parsers fuzzed + fail closed); R-002/R-003 High → Medium (unlock flow fail-closed by construction, no secret logged) — both still pending boot-path wiring (Phase 5/6) and hardware (Phase 8); R-008 now sets MBRDone in the unlock flow. |
