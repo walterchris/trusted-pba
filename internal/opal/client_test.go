@@ -73,6 +73,32 @@ func TestUnlockFailsClosed(t *testing.T) {
 			t.Fatal("expected error on unknown authority")
 		}
 	})
+
+	t.Run("success status but no session id", func(t *testing.T) {
+		dev := NewMockTPer([]byte("pw"))
+		if err := NewClient(zeroTSNTransport{dev}).Unlock(AuthorityAdmin1, []byte("pw")); err == nil {
+			t.Fatal("a SyncSession with TSN 0 must be rejected")
+		}
+		if !dev.Locked() {
+			t.Error("drive must stay locked")
+		}
+	})
+}
+
+// zeroTSNTransport serves the real discovery but replies to the session exchange
+// with a success-status SyncSession carrying TSN 0 (the control session), modelling
+// a malicious/buggy TPer.
+type zeroTSNTransport struct{ base *MockTPer }
+
+func (z zeroTSNTransport) Send(proto uint8, comID uint16, data []byte) error {
+	return z.base.Send(proto, comID, data)
+}
+
+func (z zeroTSNTransport) Recv(proto uint8, comID uint16, size int) ([]byte, error) {
+	if comID == comIDDiscovery {
+		return z.base.Recv(proto, comID, size)
+	}
+	return encodePacket(0x07fe, 0, 0, syncSessionStream(statusSuccess, 1, 0)), nil
 }
 
 func TestUnlockSkipsMBRWhenDone(t *testing.T) {
