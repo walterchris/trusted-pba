@@ -1,7 +1,7 @@
 # ADR-0007: PBA policy engine and second-stage verification model
 
 ## Status
-Proposed (policy engine + image verification is security-critical, §5.3/§23 human-gated — pending Security/Release Owner approval; the verifier code lands behind this approval)
+Accepted — §5.3/§23 human gate satisfied by the Release Owner merging PR #43 (policy engine + this ADR). The verifier (#41) and chainloader wiring (#42) implement it.
 
 ## Context
 Phase 1 chainloads a target without PBA-side validation (ADR-0006); Phase 2 detects
