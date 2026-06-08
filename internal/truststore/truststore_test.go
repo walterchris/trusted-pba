@@ -44,4 +44,12 @@ func TestStripAuth2Rejects(t *testing.T) {
 	if _, err := stripAuth2(bad); err == nil {
 		t.Error("oversized dwLength must be rejected")
 	}
+
+	// dwLength between 8 and 24 points into the middle of the WIN_CERTIFICATE
+	// header and must be rejected (the cert can never be shorter than 24 bytes).
+	short := make([]byte, 64)
+	short[16] = 10 // dwLength = 10
+	if _, err := stripAuth2(short); err == nil {
+		t.Error("dwLength below the 24-byte WIN_CERTIFICATE minimum must be rejected")
+	}
 }
