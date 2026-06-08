@@ -33,13 +33,13 @@ The ten core assets from baseline §10, with current location/status:
 
 | # | Asset | Where / status |
 |---|---|---|
-| A1 | **SED unlock secret** (Opal password/PIN, derived key material) | Planned (Phase 4–6). Must never be logged or persisted in clear. |
+| A1 | **SED unlock secret** (Opal password/PIN, derived key material) | Handled in-memory by `internal/opal` (Phase 4 library); **not yet wired into the boot path**. Never logged. |
 | A2 | **PBA binary** (`trusted-pba.efi`) | Built from `cmd/pba`; integrity is firmware Secure Boot's job (we are the signed image). |
 | A3 | **PBA policy** | `internal/policy`, compiled-in via `go:embed`, parsed fail-closed. |
 | A4 | **Customer trust anchors** | Planned (external/provisioned anchors deferred; ADR-0007 scope boundary). |
 | A5 | **Secure Boot trust chain** (db/dbx) | Embedded Microsoft materials in `internal/truststore` (pinned, SHA-256-recorded). |
 | A6 | **Windows Boot Manager handoff** | `cmd/pba` chainload (`firmware`/`pba` validation modes). |
-| A7 | **Opal session state** | Planned (Phase 4–5). |
+| A7 | **Opal session state** | Modeled in `internal/opal` (Phase 4; byte-faithful sessions, in-memory IDs). Real transport Phase 5. |
 | A8 | **Update signing key** | Planned (release/update pipeline not yet built; ADR-0003 defers signing). |
 | A9 | **Release signing key** | Planned (no production signing yet; test keys only, ephemeral, never committed). |
 | A10 | **SBOM / provenance data** | CI skeleton (#9); trust-material provenance recorded in `internal/truststore/materials/PROVENANCE.md`. |
@@ -190,10 +190,14 @@ residual risk → tests → risk IDs.
 ### 6.10 Real-drive compatibility failure
 - **Capability:** not an adversary — a real SED behaves differently from the mock,
   causing an unsafe state (e.g. unlock "succeeds" but MBRDone lags → R-008).
-- **Mitigations:** virtual-first test strategy (ADR-0005); every hardware-only
-  behavior needs a documented mock equivalent; hardware bring-up gated (Phase 8).
+- **Mitigations:** virtual-first test strategy (ADR-0005); the Opal logic is
+  **byte-faithful** so the streams it emits match real drives (ADR-0004); the Go
+  simulator and the EDK2 mock (Phase 6) share byte-exact golden fixtures
+  (`test/fixtures/opal/`); every hardware-only behavior needs a documented mock
+  equivalent; hardware bring-up gated (Phase 8).
 - **Residual risk:** medium until hardware validation — R-007, R-008, R-010.
-- **Tests:** QEMU matrices today; hardware matrix planned. → **R-007, R-008, R-010**.
+- **Tests:** Opal unit + negative matrix + `FuzzResponseParse` (host); QEMU matrices;
+  hardware matrix planned. → **R-007, R-008, R-009, R-010**.
 
 ## 7. Attack trees (key goals)
 
@@ -209,10 +213,11 @@ GOAL A: Boot an attacker-controlled image
 │       └─ revoked signer/hash → ErrRevoked*                  [mit: dbx precedence]
 └─ A.3 Swap the target after verification (TOCTOU)            [residual: R-012/#46]
 
-GOAL B: Obtain the SED unlock secret           [Phase 4–6 — mitigations planned]
-├─ B.1 Read it from logs            [mit: never log secrets — baseline §11]
-├─ B.2 Capture Opal session state   [mit: planned session hygiene; zeroization]
-└─ B.3 Unlock before auth succeeds  [mit: fail closed; do not unlock on auth fail]
+GOAL B: Obtain the SED unlock secret    [Phase 4 unlock LIBRARY done; boot wiring Phase 5/6]
+├─ B.1 Read it from logs            [mit: never log secrets — internal/opal logs none]
+├─ B.2 Capture Opal session state   [mit: in-memory session IDs; zeroization TBD]
+└─ B.3 Unlock before auth succeeds  [mit: fail closed — Set requires an auth'd session;
+                                          wrong PIN/timeout/malformed keep drive Locked]
 ```
 
 ## 8. Residual-risk summary
@@ -236,9 +241,12 @@ GOAL B: Obtain the SED unlock secret           [Phase 4–6 — mitigations plan
 | Secure Boot detection + enforcement | `internal/secureboot` `TestEnforcing`; `internal/policy` `TestCheckSecureBoot`; `sb-matrix`; `sb-require-test` |
 | dbx update parsing bounds | `TestStripAuth2Rejects`, `TestLoad` |
 | Chainload + fail-closed on no target | `run`, `run-negative` (QEMU) |
+| Opal unlock fails closed (auth/status/transport) | `internal/opal` `TestUnlockHappyPath`, `TestUnlockFailsClosed/*` |
+| Opal response parsers never panic on bad input | `FuzzResponseParse`; `TestTokenizeFailsClosed`, `TestDecodePacketFailsClosed`, `TestParseDiscoveryFailsClosed` |
 
 ## 10. Change log
 
 | Date | Change |
 |---|---|
 | 2026-06-08 | Initial threat model through Phase 3 (#4). Captures second-stage verification, Secure Boot enforcement, embedded trust anchors, the ignore-expiry decision (ADR-0007), and the SB-off TOCTOU (#46). |
+| 2026-06-08 | Phase 4: Opal unlock **library** + native simulator (ADR-0004, byte-faithful TCG). A1/A7 move from *planned* to *in-library, not yet wired*; Opal response parsers fuzzed + fail closed (R-009); unlock flow fails closed (R-002). Boot-path wiring + hardware remain Phase 5/6/8. |
