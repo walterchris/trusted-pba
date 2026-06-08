@@ -8,16 +8,23 @@ go 1.26.4
 // Dependencies are resolved/pinned by `task deps` (go get + mod tidy under
 // GOOS=tamago); the require block below is populated on first resolution.
 
-require github.com/usbarmory/go-boot v1.6.2
+require (
+	github.com/foxboron/go-uefi v0.0.0-20251010190908-d29549a44f29
+	github.com/usbarmory/go-boot v1.6.2
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/klauspost/compress v1.17.4 // indirect
 	github.com/pierrec/lz4/v4 v4.1.22 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
+	github.com/spf13/afero v1.9.3 // indirect
 	github.com/therootcompany/xz v1.0.1 // indirect
 	github.com/u-root/u-root v0.15.0 // indirect
 	github.com/u-root/uio v0.0.0-20240224005618-d2acac8f3701 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/usbarmory/tamago v1.26.4 // indirect
+	golang.org/x/crypto v0.42.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/text v0.29.0 // indirect
 )

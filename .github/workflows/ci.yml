@@ -36,17 +36,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: go test (placeholder — native Opal mock tests, #PHASE4)
-        run: |
-          echo "TODO: go test ./... with coverage; upload to evidence/test-reports/"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go test
+        run: go test ./...
 
   fuzz-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: parser fuzz smoke (placeholder — #PHASE4)
-        run: |
-          echo "TODO: go test -run=Fuzz -fuzz=. -fuzztime=30s on Opal/policy parsers"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: policy parser fuzz (smoke)
+        run: go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/policy
 
   sast:
     runs-on: ubuntu-latest
