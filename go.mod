@@ -10,7 +10,9 @@ go 1.26.4
 
 require (
 	github.com/foxboron/go-uefi v0.0.0-20251010190908-d29549a44f29
-	github.com/usbarmory/go-boot v1.6.2
+	// Pinned fork of usbarmory/go-boot v1.6.2 adding
+	// EFI_STORAGE_SECURITY_COMMAND_PROTOCOL for the Opal transport (ADR-0008).
+	github.com/walterchris/go-boot v1.6.2-tpba.1
 )
 
 require (

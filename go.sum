@@ -149,10 +149,10 @@ github.com/u-root/uio v0.0.0-20240224005618-d2acac8f3701 h1:pyC9PaHYZFgEKFdlp3G8
 github.com/u-root/uio v0.0.0-20240224005618-d2acac8f3701/go.mod h1:P3a5rG4X7tI17Nn3aOIAYr5HbIMukwXG0urG0WuL8OA=
 github.com/ulikunitz/xz v0.5.15 h1:9DNdB5s+SgV3bQ2ApL10xRc35ck0DuIX/isZvIk+ubY=
 github.com/ulikunitz/xz v0.5.15/go.mod h1:nbz6k7qbPmH4IRqmfOplQw/tblSgqTqBwxkY0oWt/14=
-github.com/usbarmory/go-boot v1.6.2 h1:zErcwHGHwJduM8LToSbHtekdbAwCKwPNN5WWWHTL54E=
-github.com/usbarmory/go-boot v1.6.2/go.mod h1:Gy2x4ptbUyNqo3n5wFLp7z8kSdnCl6v5FayGHaBNd4g=
 github.com/usbarmory/tamago v1.26.4 h1:laFvRANKgVYFHxLHjIlhqJCc3Xm+qMyab2SlUoNw6zY=
 github.com/usbarmory/tamago v1.26.4/go.mod h1:HZkb+ZkzFl8aCxAuF7exsKX+XaNM0mYG9Iv7ooX1WDY=
+github.com/walterchris/go-boot v1.6.2-tpba.1 h1:96ccMJ703gGTu/JMURiwAONn2D5993pUoi71bf8YfkQ=
+github.com/walterchris/go-boot v1.6.2-tpba.1/go.mod h1:VR89fPynnarbZDKxXRy8Acl4HLoSYQ5fLyyHXW82bWw=
 github.com/yuin/goldmark v1.1.25/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.1.27/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=
 github.com/yuin/goldmark v1.1.32/go.mod h1:3hX8gzYuyVAZsxl0MRgGTJEmQBFcNTphYh9decYSb74=

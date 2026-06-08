@@ -20,8 +20,8 @@ import (
 	"io/fs"
 	"os"
 
-	"github.com/usbarmory/go-boot/uefi"
-	"github.com/usbarmory/go-boot/uefi/x64"
+	"github.com/walterchris/go-boot/uefi"
+	"github.com/walterchris/go-boot/uefi/x64"
 	"github.com/walterchris/trusted-pba/internal/policy"
 	"github.com/walterchris/trusted-pba/internal/secureboot"
 	"github.com/walterchris/trusted-pba/internal/truststore"
