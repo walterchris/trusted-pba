@@ -6,8 +6,8 @@
 // the firmware Secure Boot state, loads the compiled-in boot policy, enforces it
 // (incl. an optional Secure-Boot-required gate), selects a target, and chainloads
 // it — failing closed on any error. Validation mode "firmware" lets the firmware
-// validate the image (Windows path); "pba" (PBA-side Authenticode validation) is
-// implemented in #41 and until then fails closed.
+// validate the image (Windows path); "pba" validates the image itself with
+// internal/imageverify against the embedded Secure Boot trust store before loading.
 //
 // The UEFI board layer (CPU + serial init, EFI System Table parsing, heap setup)
 // is provided by go-boot's uefi/x64 package, which performs that bring-up
@@ -17,12 +17,15 @@ package main
 import (
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 
 	"github.com/usbarmory/go-boot/uefi"
 	"github.com/usbarmory/go-boot/uefi/x64"
+	"github.com/walterchris/trusted-pba/internal/boottime"
 	"github.com/walterchris/trusted-pba/internal/policy"
 	"github.com/walterchris/trusted-pba/internal/secureboot"
+	"github.com/walterchris/trusted-pba/internal/truststore"
 )
 
 // Version is overridden at link time via -ldflags "-X 'main.Version=...'".
@@ -97,11 +100,51 @@ func chainload(e policy.BootEntry) error {
 	case policy.Firmware:
 		return load(e.Path)
 	case policy.PBA:
-		// PBA-side Authenticode verification lands in #41; until then, fail closed.
-		return fmt.Errorf("chainload failed: pba validation for %q not yet implemented", e.Path)
+		return verifyAndLoad(e.Path)
 	default:
 		return fmt.Errorf("chainload failed: unknown validation mode %q", e.Validation)
 	}
+}
+
+// verifyAndLoad runs PBA-side Authenticode validation against the embedded Secure
+// Boot trust store, then loads + starts the image only if it is trusted. Any
+// failure — read, trust-store load, or verification — fails closed.
+//
+// The image bytes are read once for verification; LoadImage re-reads the same path
+// to hand firmware its SourceBuffer. Pre-boot is single-threaded with no concurrent
+// process able to swap the file between the two reads, so that window is not a TOCTOU
+// risk here; under enforcing Secure Boot firmware also re-validates on load.
+func verifyAndLoad(target string) error {
+	root, err := x64.UEFI.Root()
+	if err != nil {
+		return fmt.Errorf("chainload failed: open ESP: %w", err)
+	}
+	fmt.Fprintf(out, "%s: ESP opened\r\n", banner)
+
+	image, err := fs.ReadFile(root, target)
+	if err != nil {
+		return fmt.Errorf("chainload failed: read %q: %w", target, err)
+	}
+
+	store, err := truststore.Load()
+	if err != nil {
+		return fmt.Errorf("chainload failed: trust store: %w", err)
+	}
+	if err := store.Verifier(boottime.Now()).Verify(image); err != nil {
+		return fmt.Errorf("chainload failed: verify %q: %w", target, err)
+	}
+	fmt.Fprintf(out, "%s: pba-verified %s (trust set %s)\r\n", banner, target, truststore.TrustSet)
+
+	img, err := x64.UEFI.Boot.LoadImage(bootPolicy, root, target)
+	if err != nil {
+		return fmt.Errorf("chainload failed: load %q: %w", target, err)
+	}
+	fmt.Fprintf(out, "%s: starting %s\r\n", banner, target)
+
+	if err := x64.UEFI.Boot.StartImage(img); err != nil {
+		return fmt.Errorf("chainload failed: start %q: %w", target, err)
+	}
+	return nil
 }
 
 // load opens the EFI System Partition and loads + starts the image at the given

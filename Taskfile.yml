@@ -150,6 +150,15 @@ tasks:
         FORBID='TEST-APP: ok,TRUSTED-PBA: chainload returned'
         python3 test/qemu/expect-serial.py {{.BIN}}/{{.APP}}-policytest.efi
 
+  pba-matrix:
+    desc: PBA verify-then-load matrix — embed a test CA, sign the fixture, assert accept + fail-closed reject (needs sbsign, openssl)
+    cmds:
+      - task: testapp
+      - test/qemu/pba-setup.sh {{.BIN}}/testapp.efi
+      - task: _efi
+        vars: { OUT: '{{.APP}}-pbatest', EXTRA_TAGS: ",pbatest" }
+      - test/qemu/pba-run.sh {{.BIN}}/{{.APP}}-pbatest.efi {{.BIN}}/testapp.efi
+
   test:
     desc: Run host Go tests
     cmds:
@@ -190,6 +199,7 @@ tasks:
       - task: run
       - task: run-negative
       - task: sb-require-test
+      - task: pba-matrix
       - task: sb-matrix
 
   clean:

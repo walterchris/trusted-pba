@@ -1,0 +1,10 @@
+{
+  "require_secure_boot": false,
+  "entries": [
+    {
+      "name": "test-fixture",
+      "path": "EFI/TEST/TESTAPP.EFI",
+      "validation": "pba"
+    }
+  ]
+}
