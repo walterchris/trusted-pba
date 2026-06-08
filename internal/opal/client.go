@@ -57,6 +57,12 @@ func (c *Client) Discover() (*Discovery, error) {
 // Locking SP session, clear the global range read/write locks, set MBRDone if a
 // Shadow MBR is shadowing, then close the session. Any step's failure aborts and
 // returns an error (the caller must not boot).
+//
+// A non-nil error may leave the drive partially unlocked (e.g. the global range was
+// cleared but setting MBRDone then failed). It is still fail-closed at the boot
+// level — the caller must not chainload on error — but on error the caller should
+// re-lock or halt rather than proceed or retry into boot (the Phase 5/6 wiring owns
+// that contract).
 func (c *Client) Unlock(auth Authority, pin []byte) error {
 	d, err := c.Discover()
 	if err != nil {
@@ -99,6 +105,12 @@ func (c *Client) startSession(spID, auth UID, pin []byte) error {
 	}
 	if gotHSN != hsn {
 		return fmt.Errorf("opal: start session: host session id mismatch")
+	}
+	// TSN 0 is the control session; a real session must have a non-zero TSN. Reject
+	// a (success-status) SyncSession that omits it so later Sets cannot be issued on
+	// the control session.
+	if tsn == 0 {
+		return fmt.Errorf("opal: start session: TPer assigned no session id")
 	}
 	c.hsn, c.tsn = gotHSN, tsn
 	return nil

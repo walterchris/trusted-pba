@@ -10,5 +10,7 @@
 // (Phase 5+). See ADR-0004 and docs/test-tooling-plan.md §3.
 //
 // Every device-facing parser fails closed and never panics on malformed input
-// (fuzzed; see FuzzResponseParse).
+// (fuzzed; see FuzzResponseParse). The length-field bounds checks assume a 64-bit
+// int (the product's only target is GOARCH=amd64); on a 32-bit build a uint32
+// length could wrap when converted to int and weaken those guards.
 package opal
