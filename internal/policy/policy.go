@@ -19,7 +19,7 @@ const (
 	// calls LoadImage/StartImage — the Windows Boot Manager path.
 	Firmware ValidationMode = "firmware"
 	// PBA means the PBA validates the image itself (Authenticode vs embedded
-	// db/dbx) before loading. Implemented in #41; until then it fails closed.
+	// db/dbx) before loading, via internal/imageverify.
 	PBA ValidationMode = "pba"
 )
 
