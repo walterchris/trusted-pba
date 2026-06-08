@@ -132,6 +132,10 @@ func load(target string) error {
 // boot path" the threat model forbids (CLAUDE.md/AGENTS.md). It powers off via
 // ResetSystem (QEMU exits on guest shutdown); if the firmware ignores that, it
 // stops the CPU here permanently rather than returning via Boot.Exit.
+//
+// Making the on-error action (halt vs controlled reboot/shutdown) policy-
+// configurable is tracked in #44 — any such option must stay fail-closed: a reboot
+// re-runs the PBA, never the firmware's next boot entry.
 func halt() {
 	if err := x64.UEFI.Runtime.ResetSystem(uefi.EfiResetShutdown); err != nil {
 		fmt.Fprintf(out, "%s: shutdown failed: %v; halting\r\n", banner, err)
