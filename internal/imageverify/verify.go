@@ -36,6 +36,7 @@ type Verifier struct {
 
 // Verification errors. Any non-nil error from Verify means "do not boot".
 var (
+	ErrNoTime      = errors.New("imageverify: no verification time set")
 	ErrParse       = errors.New("imageverify: cannot parse PE image")
 	ErrNoSignature = errors.New("imageverify: image has no usable signature")
 	ErrRevokedHash = errors.New("imageverify: image hash is revoked (dbx)")
@@ -48,6 +49,14 @@ var (
 // signature binds that hash, the signer chains to a db CA, and no certificate in
 // the chain is revoked by dbx. Any error means fail closed.
 func (v *Verifier) Verify(image []byte) error {
+	// Fail closed if the caller supplied no time: a zero CurrentTime makes the
+	// stdlib silently substitute time.Now(), which pre-boot is unreliable and
+	// would validate against an attacker-influenced clock. The caller must pass
+	// an RTC reading or the build-time floor (ADR-0007).
+	if v.Now.IsZero() {
+		return ErrNoTime
+	}
+
 	pe, err := authenticode.Parse(bytes.NewReader(image))
 	if err != nil {
 		return errors.Join(ErrParse, err)
@@ -63,7 +72,10 @@ func (v *Verifier) Verify(image []byte) error {
 	}
 
 	sigs, err := pe.Signatures()
-	if err != nil || len(sigs) == 0 {
+	if err != nil {
+		return errors.Join(ErrParse, err)
+	}
+	if len(sigs) == 0 {
 		return ErrNoSignature
 	}
 
@@ -93,9 +105,10 @@ func (v *Verifier) Verify(image []byte) error {
 				Roots:         v.Roots,
 				Intermediates: intermediates,
 				CurrentTime:   v.Now,
-				// EKU is not constrained here; chaining to db is the trust gate.
-				// Tightening to code-signing/UEFI EKU is a follow-up.
-				KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+				// Require code-signing EKU (ADR-0007 §3 step 3): a non-code-signing
+				// cert (e.g. TLS serverAuth) that happens to chain to db must not
+				// be allowed to boot an image.
+				KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
 			})
 			if err != nil {
 				continue // this leaf does not chain to db; try the next candidate

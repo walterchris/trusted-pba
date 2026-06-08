@@ -55,6 +55,12 @@ func newCA(t *testing.T, cn string) ca {
 // leaf issues a code-signing leaf cert + key signed by the CA.
 func (c ca) leaf(t *testing.T, cn string) (*x509.Certificate, *rsa.PrivateKey) {
 	t.Helper()
+	return c.leafEKU(t, cn, x509.ExtKeyUsageCodeSigning)
+}
+
+// leafEKU issues a leaf cert + key signed by the CA with the given extended key usage.
+func (c ca) leafEKU(t *testing.T, cn string, eku x509.ExtKeyUsage) (*x509.Certificate, *rsa.PrivateKey) {
+	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +71,7 @@ func (c ca) leaf(t *testing.T, cn string) (*x509.Certificate, *rsa.PrivateKey) {
 		NotBefore:    time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
 		NotAfter:     time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageCodeSigning},
+		ExtKeyUsage:  []x509.ExtKeyUsage{eku},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, c.cert, &key.PublicKey, c.key)
 	if err != nil {
@@ -76,6 +82,33 @@ func (c ca) leaf(t *testing.T, cn string) (*x509.Certificate, *rsa.PrivateKey) {
 		t.Fatal(err)
 	}
 	return cert, key
+}
+
+// intermediate issues a subordinate CA cert + key signed by the CA.
+func (c ca) intermediate(t *testing.T, cn string) ca {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(3),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC),
+		NotAfter:              time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, c.cert, &key.PublicKey, c.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ca{cert, key}
 }
 
 func pool(certs ...*x509.Certificate) *x509.CertPool {
@@ -168,6 +201,40 @@ func TestVerifyFailsClosed(t *testing.T) {
 	t.Run("revoked by signer cert (dbx)", func(t *testing.T) {
 		v := &Verifier{Roots: pool(root.cert), DBXCerts: []*x509.Certificate{root.cert}, Now: verifyTime}
 		if err := v.Verify(signed); !errors.Is(err, ErrRevokedCert) {
+			t.Fatalf("want ErrRevokedCert, got %v", err)
+		}
+	})
+
+	t.Run("non-code-signing EKU", func(t *testing.T) {
+		// A leaf that chains to db but carries serverAuth (not codeSigning) must
+		// not be allowed to boot, even though the chain is otherwise valid.
+		tlsCert, tlsKey := root.leafEKU(t, "TLS Server", x509.ExtKeyUsageServerAuth)
+		tlsSigned := signFixture(t, tlsKey, tlsCert, root.cert)
+		v := &Verifier{Roots: pool(root.cert), Now: verifyTime}
+		if err := v.Verify(tlsSigned); !errors.Is(err, ErrUntrusted) {
+			t.Fatalf("want ErrUntrusted, got %v", err)
+		}
+	})
+
+	t.Run("no verification time", func(t *testing.T) {
+		v := &Verifier{Roots: pool(root.cert)} // Now is zero
+		if err := v.Verify(signed); !errors.Is(err, ErrNoTime) {
+			t.Fatalf("want ErrNoTime, got %v", err)
+		}
+	})
+
+	t.Run("revoked intermediate via chain walk", func(t *testing.T) {
+		// Root -> intermediate -> leaf, where dbx revokes the intermediate. The
+		// chain validates, but the chain walk must catch the revoked intermediate.
+		inter := root.intermediate(t, "Test Intermediate CA")
+		leafCert2, leafKey2 := inter.leaf(t, "Sub Signer")
+		subSigned := signFixture(t, leafKey2, leafCert2, inter.cert, root.cert)
+		v := &Verifier{
+			Roots:    pool(root.cert),
+			DBXCerts: []*x509.Certificate{inter.cert},
+			Now:      verifyTime,
+		}
+		if err := v.Verify(subSigned); !errors.Is(err, ErrRevokedCert) {
 			t.Fatalf("want ErrRevokedCert, got %v", err)
 		}
 	})
