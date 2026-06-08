@@ -46,10 +46,17 @@ func New() (*UEFI, error) {
 
 // Send issues an IF-SEND for the given security protocol and ComID.
 func (u *UEFI) Send(proto uint8, comID uint16, data []byte) error {
-	return u.ssc.SendData(u.mediaID, u.timeout, proto, comID, data)
+	if err := u.ssc.SendData(u.mediaID, u.timeout, proto, comID, data); err != nil {
+		return fmt.Errorf("transport: IF-SEND proto=%#x comID=%#x: %w", proto, comID, err)
+	}
+	return nil
 }
 
 // Recv issues an IF-RECV and returns up to size bytes.
 func (u *UEFI) Recv(proto uint8, comID uint16, size int) ([]byte, error) {
-	return u.ssc.ReceiveData(u.mediaID, u.timeout, proto, comID, size)
+	data, err := u.ssc.ReceiveData(u.mediaID, u.timeout, proto, comID, size)
+	if err != nil {
+		return nil, fmt.Errorf("transport: IF-RECV proto=%#x comID=%#x: %w", proto, comID, err)
+	}
+	return data, nil
 }
