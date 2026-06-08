@@ -155,9 +155,13 @@ residual risk → tests → risk IDs.
 - **Capability:** a malicious/buggy `go-boot`, `go-uefi`, `tamago`, or vendored
   Microsoft material.
 - **Mitigations:** pinned module versions; vendored materials byte-identical to
-  upstream with recorded SHA-256 + commit (`PROVENANCE.md`); dependency
-  onboarding/scan **planned** (#27); SBOM/vuln-scan CI **skeleton** (#9).
-- **Residual risk:** medium until #27/#9 land vuln + license scanning.
+  upstream with recorded SHA-256 + commit (`PROVENANCE.md`); the **`walterchris/go-boot`
+  fork** (ADR-0008) is a first-party-maintained dependency, pinned by tag
+  (`v1.6.2-tpba.1`) + `go.sum` hash, with a minimal additive patch over upstream
+  v1.6.2 (small, reviewable diff); dependency onboarding/scan **planned** (#27);
+  SBOM/vuln-scan CI **skeleton** (#9).
+- **Residual risk:** medium until #27/#9 land vuln + license scanning (must cover the
+  fork).
 - **Tests:** `TestRealMicrosoftSignedImage` (materials validate a real signed
   image), `TestLoad` (materials parse). → **R-006**.
 
@@ -250,3 +254,4 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock LIBRARY done; boot wirin
 |---|---|
 | 2026-06-08 | Initial threat model through Phase 3 (#4). Captures second-stage verification, Secure Boot enforcement, embedded trust anchors, the ignore-expiry decision (ADR-0007), and the SB-off TOCTOU (#46). |
 | 2026-06-08 | Phase 4: Opal unlock **library** + native simulator (ADR-0004, byte-faithful TCG). A1/A7 move from *planned* to *in-library, not yet wired*; Opal response parsers fuzzed + fail closed (R-009); unlock flow fails closed (R-002). Boot-path wiring + hardware remain Phase 5/6/8. |
+| 2026-06-08 | Phase 5: UEFI Storage Security transport (`internal/transport`) over the **`walterchris/go-boot` fork** (ADR-0008, adds `EFI_STORAGE_SECURITY_COMMAND_PROTOCOL`). Compromised-dependency mitigations (§6.6) updated to cover the pinned first-party fork. Real SendData/ReceiveData path validated in Phase 6/8 (no host test possible). |

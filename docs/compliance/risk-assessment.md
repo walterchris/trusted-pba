@@ -93,9 +93,10 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 - **Threat/path:** crafted PBA/policy/trust-material update via a future update
   channel, a compromised dependency, CI runner, or signing key.
 - **Mitigations:** pinned deps + vendored materials with recorded SHA-256/commit;
-  protected `main`, PR-only, signed commits; ephemeral CI test keys (no prod keys
-  in CI). **Planned:** signed updates, SLSA provenance, key management, vuln/SBOM
-  scan (#9, #10, #27).
+  the `walterchris/go-boot` fork (ADR-0008) pinned by tag + `go.sum` with a minimal
+  additive patch over upstream v1.6.2; protected `main`, PR-only, signed commits;
+  ephemeral CI test keys (no prod keys in CI). **Planned:** signed updates, SLSA
+  provenance, key management, vuln/SBOM scan covering the fork (#9, #10, #27).
 - **Residual:** High until the pipeline lands. **Tests:** `TestLoad`,
   `TestRealMicrosoftSignedImage` (CI-only, `real-image-verify` job; skips without
   `TPBA_REAL_SHIM`). **Evidence:** `PROVENANCE.md`.
@@ -167,3 +168,4 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 |---|---|
 | 2026-06-08 | Initial risk assessment (#5): R-001..R-010 from baseline §9 plus R-011 (trust-anchor staleness), R-012 (SB-off TOCTOU, #46), R-013 (ignore-expiry, ADR-0007/#48). Reflects Phase 3 mitigations. |
 | 2026-06-08 | Phase 4 (Opal unlock library + simulator, ADR-0004): R-009 → Low (Opal response parsers fuzzed + fail closed); R-002/R-003 High → Medium (unlock flow fail-closed by construction, no secret logged) — both still pending boot-path wiring (Phase 5/6) and hardware (Phase 8); R-008 now sets MBRDone in the unlock flow. |
+| 2026-06-08 | Phase 5 (UEFI Storage Security transport, ADR-0008): R-006 mitigations updated to cover the pinned first-party `walterchris/go-boot` fork (tag + go.sum, minimal additive patch). |

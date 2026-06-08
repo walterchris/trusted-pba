@@ -5,8 +5,8 @@ package secureboot
 import (
 	"fmt"
 
-	"github.com/usbarmory/go-boot/uefi"
-	"github.com/usbarmory/go-boot/uefi/x64"
+	"github.com/walterchris/go-boot/uefi"
+	"github.com/walterchris/go-boot/uefi/x64"
 )
 
 // Detect reads the firmware Secure Boot state via UEFI Runtime Services. It
