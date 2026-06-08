@@ -30,10 +30,27 @@ type BootEntry struct {
 	Validation ValidationMode `json:"validation"`
 }
 
+// OnError is the terminal action taken on any fail-closed decision. Every option
+// stays fail-closed: it MUST NOT return control to the firmware boot manager / next
+// NVRAM boot entry (CLAUDE.md: never silently fall back to insecure behavior).
+type OnError string
+
+const (
+	// OnErrorHalt dead-stops the CPU (the default).
+	OnErrorHalt OnError = "halt"
+	// OnErrorShutdown powers the machine off.
+	OnErrorShutdown OnError = "shutdown"
+	// OnErrorReboot resets the machine, which re-runs the PBA from the start
+	// (never the firmware's next boot option).
+	OnErrorReboot OnError = "reboot"
+)
+
 // Policy is the compiled-in boot-trust policy.
 type Policy struct {
 	RequireSecureBoot bool        `json:"require_secure_boot"`
 	Entries           []BootEntry `json:"entries"`
+	// OnError is the action on any fail-closed decision; empty means OnErrorHalt.
+	OnError OnError `json:"on_error"`
 }
 
 // Sentinel errors.
@@ -58,6 +75,13 @@ func Parse(data []byte) (*Policy, error) {
 	}
 	if len(p.Entries) == 0 {
 		return nil, ErrNoEntries
+	}
+	switch p.OnError {
+	case "":
+		p.OnError = OnErrorHalt
+	case OnErrorHalt, OnErrorShutdown, OnErrorReboot:
+	default:
+		return nil, fmt.Errorf("unknown on_error %q", p.OnError)
 	}
 	for i, e := range p.Entries {
 		if e.Name == "" || e.Path == "" {

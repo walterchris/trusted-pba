@@ -25,10 +25,34 @@ func TestParseFailsClosed(t *testing.T) {
 		"unknown validation": `{"entries":[{"name":"x","path":"a","validation":"magic"}]}`,
 		"unknown field":      `{"entries":[{"name":"x","path":"a","validation":"pba","extra":1}]}`,
 		"wrong type":         `{"require_secure_boot":"yes","entries":[]}`,
+		"unknown on_error":   `{"on_error":"explode","entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 	}
 	for name, in := range bad {
 		if _, err := Parse([]byte(in)); err == nil {
 			t.Errorf("%s: expected error, got nil", name)
+		}
+	}
+}
+
+func TestParseOnError(t *testing.T) {
+	// Absent on_error defaults to halt (the safest fail-closed action).
+	p, err := Parse([]byte(`{"entries":[{"name":"x","path":"a","validation":"pba"}]}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if p.OnError != OnErrorHalt {
+		t.Errorf("default on_error = %q, want %q", p.OnError, OnErrorHalt)
+	}
+
+	for _, mode := range []OnError{OnErrorHalt, OnErrorShutdown, OnErrorReboot} {
+		in := `{"on_error":"` + string(mode) + `","entries":[{"name":"x","path":"a","validation":"pba"}]}`
+		got, err := Parse([]byte(in))
+		if err != nil {
+			t.Errorf("on_error %q: unexpected error %v", mode, err)
+			continue
+		}
+		if got.OnError != mode {
+			t.Errorf("on_error = %q, want %q", got.OnError, mode)
 		}
 	}
 }

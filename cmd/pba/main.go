@@ -51,15 +51,27 @@ func main() {
 	fmt.Fprintf(out, "%s: start\r\n", banner)
 	fmt.Fprintf(out, "%s: version %s\r\n", banner, Version)
 
-	if err := run(secureBootEnforcing()); err != nil {
-		// Fail closed: report and halt. Never continue as if the boot succeeded.
+	// Until the policy is loaded the only safe terminal action is halt.
+	mode := policy.OnErrorHalt
+
+	pol, err := policy.Default()
+	if err != nil {
+		fmt.Fprintf(out, "%s: policy load failed: %v\r\n", banner, err)
+		terminate(mode)
+		return
+	}
+	mode = pol.OnError
+
+	if err := run(pol, secureBootEnforcing()); err != nil {
+		// Fail closed: report and carry out the policy's on-error action. Never
+		// continue as if the boot succeeded.
 		fmt.Fprintf(out, "%s: %v\r\n", banner, err)
-		halt()
+		terminate(mode)
 		return
 	}
 
 	fmt.Fprintf(out, "%s: chainload returned\r\n", banner)
-	halt()
+	terminate(mode)
 }
 
 // secureBootEnforcing reports + returns whether the firmware is enforcing Secure
@@ -75,12 +87,8 @@ func secureBootEnforcing() bool {
 	return st.Enforcing()
 }
 
-// run loads the policy, enforces it, selects a target, and chainloads it.
-func run(enforcing bool) error {
-	pol, err := policy.Default()
-	if err != nil {
-		return fmt.Errorf("policy load failed: %w", err)
-	}
+// run enforces the policy, selects a target, and chainloads it.
+func run(pol *policy.Policy, enforcing bool) error {
 	if err := pol.CheckSecureBoot(enforcing); err != nil {
 		return fmt.Errorf("policy: %w", err)
 	}
@@ -169,20 +177,32 @@ func load(target string) error {
 	return nil
 }
 
-// halt stops the machine. It is reached after a completed chainload AND after any
-// fail-closed decision (policy denial, Secure-Boot-required, unverified target,
-// load failure), so it MUST NOT hand control back to the firmware boot manager —
-// that would proceed to the next boot option, the "silently continue to another
-// boot path" the threat model forbids (CLAUDE.md/AGENTS.md). It powers off via
-// ResetSystem (QEMU exits on guest shutdown); if the firmware ignores that, it
-// stops the CPU here permanently rather than returning via Boot.Exit.
+// terminate carries out the policy's fail-closed on-error action. It is reached
+// after a completed chainload AND after any fail-closed decision (policy denial,
+// Secure-Boot-required, unverified target, load failure), so it MUST NOT hand
+// control back to the firmware boot manager — that would proceed to the next boot
+// option, the "silently continue to another boot path" the threat model forbids
+// (CLAUDE.md/AGENTS.md). Every mode therefore ends at the dead-stop, never at
+// Boot.Exit:
+//   - halt (default): stop the CPU.
+//   - shutdown: power off via ResetSystem (QEMU exits on guest shutdown).
+//   - reboot: reset via ResetSystem, which re-runs the PBA from the start — never
+//     the firmware's next boot entry.
 //
-// Making the on-error action (halt vs controlled reboot/shutdown) policy-
-// configurable is tracked in #44 — any such option must stay fail-closed: a reboot
-// re-runs the PBA, never the firmware's next boot entry.
-func halt() {
-	if err := x64.UEFI.Runtime.ResetSystem(uefi.EfiResetShutdown); err != nil {
-		fmt.Fprintf(out, "%s: shutdown failed: %v; halting\r\n", banner, err)
+// A failed ResetSystem falls through to the dead-stop, so control is never handed
+// back regardless of mode.
+func terminate(mode policy.OnError) {
+	switch mode {
+	case policy.OnErrorReboot:
+		fmt.Fprintf(out, "%s: rebooting\r\n", banner)
+		if err := x64.UEFI.Runtime.ResetSystem(uefi.EfiResetCold); err != nil {
+			fmt.Fprintf(out, "%s: reset failed: %v; halting\r\n", banner, err)
+		}
+	case policy.OnErrorShutdown:
+		fmt.Fprintf(out, "%s: powering off\r\n", banner)
+		if err := x64.UEFI.Runtime.ResetSystem(uefi.EfiResetShutdown); err != nil {
+			fmt.Fprintf(out, "%s: shutdown failed: %v; halting\r\n", banner, err)
+		}
 	}
 	for {
 		// Dead stop: never return to the firmware boot order.
