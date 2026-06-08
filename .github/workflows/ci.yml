@@ -129,6 +129,24 @@ jobs:
           name: qemu-serial-log
           path: qemu-serial.log
 
+  pba-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU, OVMF, mtools, gnu-efi, sbsigntool, openssl
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 ovmf mtools gnu-efi sbsigntool openssl
+      - name: Install go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: PBA verify-then-load matrix (pba-accept signed / pba-reject unsigned fail-closed)
+        run: task pba-matrix
+
   secureboot-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 20

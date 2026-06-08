@@ -47,15 +47,23 @@ Replicate firmware UEFI image authentication in Go/TamaGo:
    `EFI_CERT_X509` entry.
 
 **Trust anchors** are vendored from `github.com/microsoft/secureboot_objects`
-(pinned commit + per-blob SHA-256 recorded for provenance) and `go:embed`ed. The
-embedded set is **configurable at build time**, with a **Windows-only** option
-(Microsoft Windows Production PCA 2011 + Windows UEFI CA 2023); the default set also
-includes the third-party CAs (Microsoft (Corporation) UEFI CA 2011/2023) for
-shim/GRUB. Both 2011 and 2023 generations are embedded for forward-compat.
+(pinned commit + per-blob SHA-256 recorded in `internal/truststore/materials/PROVENANCE.md`)
+and `go:embed`ed. The embedded set is **configurable at build time**. The **default
+is Windows-only** (Microsoft Windows Production PCA 2011 + Windows UEFI CA 2023), so
+only Windows Boot Manager validates via the `pba` path — the tightest default trust
+surface. Building with `-tags trustfull` adds the third-party Microsoft (Corporation)
+UEFI CA 2011/2023 for shim/GRUB/Linux. Both 2011 and 2023 generations are embedded
+for forward-compat. The amd64 `dbx` update is embedded as Microsoft's exact signed
+artifact; `truststore` strips its `EFI_VARIABLE_AUTHENTICATION_2` header and parses
+the revoked image hashes (it trusts the pinned, hash-recorded blob rather than
+re-verifying the update's PKCS#7).
 
-**Time policy:** chain validity is checked against the **UEFI RTC** (`GetTime`) when
-available; if no reliable clock is available pre-boot, fall back to the PBA's
-**build-time floor**. (Documented here because it is a security-behavior choice.)
+**Time policy:** chain validity is checked against the platform **RTC** (read via
+go-boot's `x64.RTC`), **clamped to a compiled-in build-time floor** (`internal/boottime`):
+a failed read or a reading earlier than the floor (an unset/garbage pre-boot clock)
+falls back to the floor, so validity is never checked against an attacker-influenced
+earlier time. A zero/unset time fails closed in `imageverify` (`ErrNoTime`).
+(Documented here because it is a security-behavior choice.)
 
 ### Scope boundary
 Under *enforcing* Secure Boot the firmware already validates images, so the `pba`
