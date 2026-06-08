@@ -54,6 +54,12 @@ func Load() (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("truststore: parse dbx: %w", err)
 	}
+	// Defense in depth: the embedded dbx always carries revocations, so a parse
+	// that yields none means the artifact or the parser is wrong. Fail closed
+	// rather than boot with a silently empty revocation set.
+	if len(hashes) == 0 && len(certs) == 0 {
+		return nil, errors.New("truststore: dbx parsed to no revocations")
+	}
 
 	return &Store{DB: pool, DBXHashes: hashes, DBXCerts: certs}, nil
 }
@@ -75,12 +81,16 @@ func (s *Store) Verifier(now time.Time) *imageverify.Verifier {
 // covers the whole certificate; the payload starts at 16 + dwLength.
 func stripAuth2(b []byte) ([]byte, error) {
 	const efiTimeLen = 16
+	// dwLength spans the whole WIN_CERTIFICATE_UEFI_GUID: an 8-byte WIN_CERTIFICATE
+	// header (dwLength + wRevision + wCertificateType) plus the 16-byte cert-type
+	// GUID, so it can never be smaller than 24.
+	const minWinCertLen = 24
 	if len(b) < efiTimeLen+4 {
 		return nil, errors.New("update too short for authentication header")
 	}
 	dwLength := binary.LittleEndian.Uint32(b[efiTimeLen : efiTimeLen+4])
 	off := efiTimeLen + int(dwLength)
-	if dwLength < 8 || off > len(b) {
+	if dwLength < minWinCertLen || off > len(b) {
 		return nil, fmt.Errorf("invalid authentication header length %d", dwLength)
 	}
 	return b[off:], nil

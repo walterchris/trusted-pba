@@ -113,7 +113,9 @@ func chainload(e policy.BootEntry) error {
 // The image bytes are read once for verification; LoadImage re-reads the same path
 // to hand firmware its SourceBuffer. Pre-boot is single-threaded with no concurrent
 // process able to swap the file between the two reads, so that window is not a TOCTOU
-// risk here; under enforcing Secure Boot firmware also re-validates on load.
+// risk here; under enforcing Secure Boot firmware also re-validates on load. Loading
+// from the already-verified buffer (needs a go-boot SourceBuffer entry point) is
+// tracked in #46 as defense-in-depth for the Secure-Boot-off case.
 func verifyAndLoad(target string) error {
 	root, err := x64.UEFI.Root()
 	if err != nil {
