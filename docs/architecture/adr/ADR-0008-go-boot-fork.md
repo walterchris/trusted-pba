@@ -2,7 +2,8 @@
 
 ## Status
 Accepted — §5.3/§23 human gate satisfied by the Release Owner merging the Phase 5
-PR. Authored in Phase 5.
+PR. Authored in Phase 5. Amended 2026-06-10: pin bumped to `v1.6.2-tpba.2`
+(additive `LoadImageBuffer`, #46).
 
 ## Context
 go-boot v1.6.2 wraps only a **fixed set** of UEFI protocols/services (graphics,
@@ -26,7 +27,7 @@ dependency layer (rather than adding `unsafe`/assembly to the product).
   module path is renamed to `github.com/walterchris/go-boot`; the Trusted PBA
   imports it **by that name** (a plain `require`, no `replace` — replace-with-rename
   causes a "module used for two paths" conflict). Pinned by the tag
-  **`v1.6.2-tpba.1`** (upstream v1.6.2 + our patch) and locked in `go.sum`.
+  **`v1.6.2-tpba.2`** (upstream v1.6.2 + our additive patches) and locked in `go.sum`.
 - **Addition (minimal, additive):** one file `uefi/storagesecurity.go` —
   `GetStorageSecurity()` (locate + resolve `ReceiveData`/`SendData` pointers via the
   existing `decode`) and `SendData`/`ReceiveData` (via the existing `callService`).
@@ -35,8 +36,9 @@ dependency layer (rather than adding `unsafe`/assembly to the product).
   the (small, additive) patch, re-tag `vX.Y.Z-tpba.N`, update `go.mod`/`go.sum`.
   Keeping the patch additive (no edits to upstream files beyond the mechanical
   module-path rename) keeps re-base cheap. The fork's open follow-ups (GetTime,
-  `LoadImageBuffer` for #46, `LocateHandleBuffer` + `EFI_BLOCK_IO` MediaId for real
-  hardware) land as further additive files.
+  `LocateHandleBuffer` + `EFI_BLOCK_IO` MediaId for real hardware) land as further
+  additive files; `LoadImageBuffer` (#46) landed this way in `v1.6.2-tpba.2`
+  (`uefi/loadimagebuffer.go`).
 
 ## Alternatives Considered
 - **In-repo `unsafe`+asm UEFI-call primitive** — keeps everything in our tree but

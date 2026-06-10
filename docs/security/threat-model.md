@@ -102,8 +102,10 @@ residual risk → tests → risk IDs.
   (`internal/imageverify`); `firmware` mode defers to firmware Secure Boot; the
   policy is compiled-in (not ESP-resident); **fail closed** on any error;
   `halt()` dead-stops and never returns control to the firmware boot order.
-- **Residual risk:** a TOCTOU re-read window under Secure-Boot-off (R-012,
-  follow-up #46); accepting an image whose short-lived signing leaf expired is
+- **Residual risk:** the SB-off TOCTOU re-read window is mitigated — the PBA
+  chainloads from the exact verified in-memory buffer (`LoadImageBuffer`
+  SourceBuffer), so verified bytes == executed bytes regardless of Secure Boot
+  state (R-012, #46); accepting an image whose short-lived signing leaf expired is
   *intentional* (matches firmware — R-013/#48).
 - **Tests:** `TestVerifyFailsClosed/*`, `pba-matrix` (accept/reject),
   `run-negative` (no target → fail closed). → **R-001**.
@@ -159,7 +161,7 @@ residual risk → tests → risk IDs.
 - **Mitigations:** pinned module versions; vendored materials byte-identical to
   upstream with recorded SHA-256 + commit (`PROVENANCE.md`); the **`walterchris/go-boot`
   fork** (ADR-0008) is a first-party-maintained dependency, pinned by tag
-  (`v1.6.2-tpba.1`) + `go.sum` hash, with a minimal additive patch over upstream
+  (`v1.6.2-tpba.2`) + `go.sum` hash, with a minimal additive patch over upstream
   v1.6.2 (small, reviewable diff); dependency onboarding/scan **planned** (#27);
   SBOM/vuln-scan CI **skeleton** (#9).
 - **Residual risk:** medium until #27/#9 land vuln + license scanning (must cover the
@@ -217,7 +219,8 @@ GOAL A: Boot an attacker-controlled image
 │       ├─ unsigned/tampered → ErrNoSignature/hash mismatch   [mit: imageverify]
 │       ├─ untrusted signer  → ErrUntrusted (no db chain)     [mit: db chain + EKU]
 │       └─ revoked signer/hash → ErrRevoked*                  [mit: dbx precedence]
-└─ A.3 Swap the target after verification (TOCTOU)            [residual: R-012/#46]
+└─ A.3 Swap the target after verification (TOCTOU)   [mit: verified-buffer load,
+                                              firmware never re-reads — R-012/#46]
 
 GOAL B: Obtain the SED unlock secret    [Phase 4 unlock LIBRARY done; boot wiring Phase 5/6]
 ├─ B.1 Read it from logs            [mit: never log secrets — opal-layer silence + PIN-free
@@ -237,7 +240,7 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock LIBRARY done; boot wirin
 | R-005 | Rollback to vulnerable PBA / stale dbx | Open — anti-rollback not built |
 | R-006 | Malicious update / compromised supply chain | Open — update pipeline + signing not built |
 | R-011 | Trust-anchor staleness (2011 CAs expire 2026-06-27) | Open — ADR-gated refresh; 2023 CAs embedded |
-| R-012 | SB-off TOCTOU re-read window | Open — follow-up #46 |
+| R-012 | SB-off TOCTOU re-read window | Mitigated (#46) — verified-buffer chainload; residual Low |
 | R-013 | Ignore signing-cert expiry (firmware semantics) | Accepted — control is dbx; research #48 |
 
 ## 9. Test mapping
@@ -254,6 +257,7 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock LIBRARY done; boot wirin
 | Opal unlock fails closed (auth/status/transport) | `internal/opal` `TestUnlockHappyPath`, `TestUnlockFailsClosed/*` |
 | Opal response parsers never panic on bad input | `FuzzResponseParse`; `TestTokenizeFailsClosed`, `TestDecodePacketFailsClosed`, `TestParseDiscoveryFailsClosed` |
 | Unlock secret never logged, buffers zeroized | `internal/opal` `TestUnlockEmitsNoConsoleOutput` (fd-level), `TestUnlockZeroizesSecrets`, `TestTransactZeroizesMethodPayload`, `TestStartSessionGrowBudget`, `TestBuilderGrowPreventsReallocation` |
+| Verified bytes are the loaded bytes (no re-read TOCTOU) | `cmd/pba` `TestVerifyAndLoadVerifiedBufferInvariant` (ordering + single-read + reassignment ban, mutation-verified) |
 
 ## 10. Change log
 
@@ -263,3 +267,4 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock LIBRARY done; boot wirin
 | 2026-06-08 | Phase 4: Opal unlock **library** + native simulator (ADR-0004, byte-faithful TCG). A1/A7 move from *planned* to *in-library, not yet wired*; Opal response parsers fuzzed + fail closed (R-009); unlock flow fails closed (R-002). Boot-path wiring + hardware remain Phase 5/6/8. |
 | 2026-06-08 | Phase 5: UEFI Storage Security transport (`internal/transport`) over the **`walterchris/go-boot` fork** (ADR-0008, adds `EFI_STORAGE_SECURITY_COMMAND_PROTOCOL`). Compromised-dependency mitigations (§6.6) updated to cover the pinned first-party fork. Real SendData/ReceiveData path validated in Phase 6/8 (no host test possible). |
 | 2026-06-10 | #51 item 1 (Phase 5/6 gate): PIN-buffer zeroization in `internal/opal` — caller pin, method payload, and transmitted ComPacket frames cleared on success and all failure paths; tested grow budget prevents append reallocation; fd-level log-scrub test asserts opal-layer silence + PIN-free error text (mutation-verified). A1/A7, §6.2, and attack tree B.1/B.2 updated; R-003 residual Medium → Low. Boot-path PIN-*input* zeroization remains open for the Phase 6 wiring (#51 item 2). |
+| 2026-06-10 | #46: chainload from the verified in-memory buffer via the fork's `LoadImageBuffer` (pin `v1.6.2-tpba.2`) closes the SB-off verify-then-load TOCTOU (attack tree A.3); R-012 Open → Mitigated. §6.1 residual risk, A.3, §8 summary, and test mapping updated. Review record: `evidence/security-review-records/2026-06-10-chainload-verified-buffer-46.md`. |
