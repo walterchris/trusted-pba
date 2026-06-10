@@ -25,6 +25,14 @@ func (s *spyTransport) Send(proto uint8, comID uint16, data []byte) error {
 	return s.MockTPer.Send(proto, comID, data)
 }
 
+// newSpy returns a spy transport over a fresh mock TPer provisioned with
+// devicePIN, watching the wire for callerPIN, plus the mutable pin slice the
+// test hands to Unlock (which consumes it).
+func newSpy(devicePIN, callerPIN string) (*spyTransport, []byte) {
+	spy := &spyTransport{MockTPer: NewMockTPer([]byte(devicePIN)), secret: []byte(callerPIN)}
+	return spy, []byte(callerPIN)
+}
+
 func allZero(b []byte) bool {
 	for _, c := range b {
 		if c != 0 {
@@ -58,8 +66,7 @@ func assertZeroized(t *testing.T, spy *spyTransport, pin []byte) {
 
 func TestUnlockZeroizesSecrets(t *testing.T) {
 	t.Run("successful auth", func(t *testing.T) {
-		pin := []byte("correct horse")
-		spy := &spyTransport{MockTPer: NewMockTPer([]byte("correct horse")), secret: []byte("correct horse")}
+		spy, pin := newSpy("correct horse", "correct horse")
 		if err := NewClient(spy).Unlock(AuthorityAdmin1, pin); err != nil {
 			t.Fatalf("Unlock: %v", err)
 		}
@@ -67,8 +74,7 @@ func TestUnlockZeroizesSecrets(t *testing.T) {
 	})
 
 	t.Run("failed auth", func(t *testing.T) {
-		pin := []byte("wrong pin")
-		spy := &spyTransport{MockTPer: NewMockTPer([]byte("right pin")), secret: []byte("wrong pin")}
+		spy, pin := newSpy("right pin", "wrong pin")
 		if err := NewClient(spy).Unlock(AuthorityAdmin1, pin); err == nil {
 			t.Fatal("expected auth failure")
 		}
@@ -88,10 +94,8 @@ func TestUnlockZeroizesSecrets(t *testing.T) {
 	})
 
 	t.Run("malformed response after the PIN was transmitted", func(t *testing.T) {
-		pin := []byte("super secret")
-		dev := NewMockTPer([]byte("super secret"))
-		dev.Inject(FaultMalformed) // Send (carrying the PIN) succeeds; the session Recv fails to decode
-		spy := &spyTransport{MockTPer: dev, secret: []byte("super secret")}
+		spy, pin := newSpy("super secret", "super secret")
+		spy.Inject(FaultMalformed) // Send (carrying the PIN) succeeds; the session Recv fails to decode
 		if err := NewClient(spy).Unlock(AuthorityAdmin1, pin); err == nil {
 			t.Fatal("expected decode failure")
 		}
@@ -99,10 +103,8 @@ func TestUnlockZeroizesSecrets(t *testing.T) {
 	})
 
 	t.Run("transport failure mid-session after successful auth", func(t *testing.T) {
-		pin := []byte("super secret")
-		dev := NewMockTPer([]byte("super secret"))
-		spy := &spyTransport{MockTPer: dev, secret: []byte("super secret")}
-		if err := NewClient(&failAfterAuthTransport{spyTransport: spy, dev: dev}).Unlock(AuthorityAdmin1, pin); !errors.Is(err, ErrTimeout) {
+		spy, pin := newSpy("super secret", "super secret")
+		if err := NewClient(&failAfterAuthTransport{spyTransport: spy}).Unlock(AuthorityAdmin1, pin); !errors.Is(err, ErrTimeout) {
 			t.Fatalf("want ErrTimeout mid-session, got %v", err)
 		}
 		// Two sends prove the failure hit the in-session command, not StartSession.
@@ -119,14 +121,13 @@ func TestUnlockZeroizesSecrets(t *testing.T) {
 // successful authentication.
 type failAfterAuthTransport struct {
 	*spyTransport
-	dev   *MockTPer
 	sends int
 }
 
 func (f *failAfterAuthTransport) Send(proto uint8, comID uint16, data []byte) error {
 	f.sends++
 	if f.sends == 2 { // send 1: StartSession (succeeds); send 2: Set on the locking range
-		f.dev.Inject(FaultTimeout)
+		f.Inject(FaultTimeout)
 	}
 	return f.spyTransport.Send(proto, comID, data)
 }
@@ -166,6 +167,42 @@ func TestTransactZeroizesMethodPayload(t *testing.T) {
 			t.Errorf("method payload not zeroized after failed transact: %x", cmd)
 		}
 	})
+}
+
+// TestStartSessionGrowBudget pins the 64-byte reservation in startSessionCmd
+// (method.go): everything the method appends after its grow call, beyond the
+// PIN's own bytes, must fit in the reserved 64 bytes — otherwise an append
+// could reallocate the backing array and strand an unreachable copy of the PIN
+// that zeroize cannot reach. The budget was previously maintained only by a
+// comment; this test measures it at the real call site with worst-case non-PIN
+// inputs (maximum HSN, so the integer atom is largest).
+func TestStartSessionGrowBudget(t *testing.T) {
+	// Measure the fixed prefix buildMethod emits before the args callback runs
+	// (i.e. before startSessionCmd's grow): Call + two 9-byte UID atoms +
+	// StartList = 20 bytes today. Fail loudly if buildMethod changes shape.
+	var prefixLen int
+	buildMethod(uidSMUID, uidMethodStartSession, func(b *builder) { prefixLen = len(b.buf) })
+	if prefixLen != 20 {
+		t.Fatalf("pre-grow prefix is %d bytes, want 20 — buildMethod changed; re-derive this test's budget", prefixLen)
+	}
+
+	// nil PIN isolates the pure non-PIN overhead; the 2048-byte PIN forces the
+	// largest byte-string atom header (4 bytes), which also comes out of the
+	// 64-byte budget since grow only reserves 64+len(pin).
+	for _, tc := range []struct {
+		name string
+		pin  []byte
+	}{
+		{"nil pin", nil},
+		{"long-atom pin", make([]byte, 2048)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			overhead := len(startSessionCmd(^uint32(0), uidLockingSP, uidAuthAdmin1, tc.pin)) - prefixLen - len(tc.pin)
+			if overhead > 64 {
+				t.Errorf("startSessionCmd appends %d non-PIN bytes after grow; budget is 64 (method.go) — raise the reservation", overhead)
+			}
+		})
+	}
 }
 
 func TestBuilderGrowPreventsReallocation(t *testing.T) {

@@ -10,7 +10,8 @@ type Transport interface {
 	// Send issues an IF-SEND (Security Protocol Out) of data for the given security
 	// protocol and ComID (SP-specific value). data may embed credentials (the
 	// StartSession host challenge): an implementation must not retain data after
-	// Send returns, because the client zeroizes it. Copies made beyond the
+	// Send returns, because the client zeroizes it, and must zeroize any transient
+	// Go-side copies of data it makes before returning. Copies made beyond the
 	// transport boundary — firmware command buffers, device DMA — are outside the
 	// client's reach and cannot be zeroized here.
 	Send(proto uint8, comID uint16, data []byte) error
