@@ -33,13 +33,13 @@ The ten core assets from baseline §10, with current location/status:
 
 | # | Asset | Where / status |
 |---|---|---|
-| A1 | **SED unlock secret** (Opal password/PIN, derived key material) | Handled in-memory by `internal/opal` (Phase 4 library); **not yet wired into the boot path**. Never logged; all client-side PIN-bearing buffers zeroized on success and all failure paths (#51 item 1). |
+| A1 | **SED unlock secret** (Opal password/PIN, derived key material) | **Wired into the boot path** (Phase 6, ADR-0009): the policy-gated `sed_unlock` flow hands the PIN to `opal.Unlock` exactly once; the policy holder is cleared and the slice zeroized on every path. MVP PIN source is the compiled-in test policy (extractable from the image; replaced by real auth before production — ADR-0009). Never logged; all client-side PIN-bearing buffers zeroized on success and all failure paths (#51 item 1). |
 | A2 | **PBA binary** (`trusted-pba.efi`) | Built from `cmd/pba`; integrity is firmware Secure Boot's job (we are the signed image). |
 | A3 | **PBA policy** | `internal/policy`, compiled-in via `go:embed`, parsed fail-closed. |
 | A4 | **Customer trust anchors** | Planned (external/provisioned anchors deferred; ADR-0007 scope boundary). |
 | A5 | **Secure Boot trust chain** (db/dbx) | Embedded Microsoft materials in `internal/truststore` (pinned, SHA-256-recorded). |
 | A6 | **Windows Boot Manager handoff** | `cmd/pba` chainload (`firmware`/`pba` validation modes). |
-| A7 | **Opal session state** | Modeled in `internal/opal` (Phase 4; byte-faithful sessions, in-memory IDs); PIN-bearing frames zeroized after the exchange (#51 item 1). Real transport Phase 5. |
+| A7 | **Opal session state** | Modeled in `internal/opal` (Phase 4; byte-faithful sessions, in-memory IDs); PIN-bearing frames zeroized after the exchange (#51 item 1). **Driven over the real UEFI transport in the boot path** (Phase 6, ADR-0009); any unlock error — including a partial unlock — terminates via the on-error action, never proceeds or retries into boot (#51 item 2). |
 | A8 | **Update signing key** | Planned (release/update pipeline not yet built; ADR-0003 defers signing). |
 | A9 | **Release signing key** | Planned (no production signing yet; test keys only, ephemeral, never committed). |
 | A10 | **SBOM / provenance data** | CI skeleton (#9); trust-material provenance recorded in `internal/truststore/materials/PROVENANCE.md`. |
@@ -258,6 +258,7 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock LIBRARY done; boot wirin
 | Opal response parsers never panic on bad input | `FuzzResponseParse`; `TestTokenizeFailsClosed`, `TestDecodePacketFailsClosed`, `TestParseDiscoveryFailsClosed` |
 | Unlock secret never logged, buffers zeroized | `internal/opal` `TestUnlockEmitsNoConsoleOutput` (fd-level), `TestUnlockZeroizesSecrets`, `TestTransactZeroizesMethodPayload`, `TestStartSessionGrowBudget`, `TestBuilderGrowPreventsReallocation` |
 | Verified bytes are the loaded bytes (no re-read TOCTOU) | `cmd/pba` `TestVerifyAndLoadVerifiedBufferInvariant` (ordering + single-read + reassignment ban, mutation-verified) |
+| SED unlock gate fails closed in the boot path | `internal/policy` `TestParseSEDUnlock`, `TestParseFailsClosed` (absence = required); `cmd/pba` `TestUnlockSEDNoneSkipsLoudly`, `TestUnlockSEDRequiredHappyPath`, `TestUnlockSEDFailsClosedOnWrongPIN`, `TestUnlockSEDFailsClosedOnTransportFault`, `TestUnlockSEDFailsClosedWithoutCarrier` |
 
 ## 10. Change log
 
@@ -268,3 +269,4 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock LIBRARY done; boot wirin
 | 2026-06-08 | Phase 5: UEFI Storage Security transport (`internal/transport`) over the **`walterchris/go-boot` fork** (ADR-0008, adds `EFI_STORAGE_SECURITY_COMMAND_PROTOCOL`). Compromised-dependency mitigations (§6.6) updated to cover the pinned first-party fork. Real SendData/ReceiveData path validated in Phase 6/8 (no host test possible). |
 | 2026-06-10 | #51 item 1 (Phase 5/6 gate): PIN-buffer zeroization in `internal/opal` — caller pin, method payload, and transmitted ComPacket frames cleared on success and all failure paths; tested grow budget prevents append reallocation; fd-level log-scrub test asserts opal-layer silence + PIN-free error text (mutation-verified). A1/A7, §6.2, and attack tree B.1/B.2 updated; R-003 residual Medium → Low. Boot-path PIN-*input* zeroization remains open for the Phase 6 wiring (#51 item 2). |
 | 2026-06-10 | #46: chainload from the verified in-memory buffer via the fork's `LoadImageBuffer` (pin `v1.6.2-tpba.2`) closes the SB-off verify-then-load TOCTOU (attack tree A.3); R-012 Open → Mitigated. §6.1 residual risk, A.3, §8 summary, and test mapping updated. Review record: `evidence/security-review-records/2026-06-10-chainload-verified-buffer-46.md`. |
+| 2026-06-10 | Phase 6 boot-path wiring (#22, #51 item 2, ADR-0009): policy-gated `sed_unlock` (`required`\|`none`, absence = required, `none` logged loudly) drives `opal.Unlock` over the UEFI transport before any chainload; any error — incl. partial unlock and missing Storage Security device — terminates via the on-error action, no retry/fallback. A1/A7 move to *wired*; MVP compiled-in PIN residual documented (ADR-0009). QEMU MockOpalDxe end-to-end is the next Phase 6 ticket. |
