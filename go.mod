@@ -12,8 +12,11 @@ require (
 	github.com/foxboron/go-uefi v0.0.0-20251010190908-d29549a44f29
 	// Pinned fork of usbarmory/go-boot v1.6.2 adding
 	// EFI_STORAGE_SECURITY_COMMAND_PROTOCOL for the Opal transport (ADR-0008)
-	// and LoadImageBuffer for verified-buffer chainloading (#46).
-	github.com/walterchris/go-boot v1.6.2-tpba.2
+	// and LoadImageBuffer for verified-buffer chainloading (#46). tpba.3 fixes
+	// the SSC service dispatch (double dereference) and callFn's stack
+	// alignment for odd stack-argument counts — both caught by the mock-Opal
+	// QEMU integration matrix (#22).
+	github.com/walterchris/go-boot v1.6.2-tpba.3
 )
 
 require (
