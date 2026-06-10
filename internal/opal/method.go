@@ -46,6 +46,11 @@ func buildMethod(invoker, method UID, args func(b *builder)) []byte {
 // pin as the given authority against spID (the SP to open).
 func startSessionCmd(hsn uint32, spID UID, auth UID, pin []byte) []byte {
 	return buildMethod(uidSMUID, uidMethodStartSession, func(b *builder) {
+		// Reserve all remaining space up front: no append after the PIN bytes are
+		// written may reallocate, or a stale copy of the PIN would be stranded in an
+		// unreachable backing array that zeroize cannot reach. 64 bytes covers every
+		// token this method emits after this point besides the PIN itself.
+		b.grow(64 + len(pin))
 		b.uint(uint64(hsn)) // HostSessionID
 		b.uid(spID)         // SPID
 		b.uint(1)           // Write = TRUE

@@ -8,7 +8,11 @@ import "fmt"
 // real hardware. Defined here because the Opal client is its only consumer.
 type Transport interface {
 	// Send issues an IF-SEND (Security Protocol Out) of data for the given security
-	// protocol and ComID (SP-specific value).
+	// protocol and ComID (SP-specific value). data may embed credentials (the
+	// StartSession host challenge): an implementation must not retain data after
+	// Send returns, because the client zeroizes it. Copies made beyond the
+	// transport boundary — firmware command buffers, device DMA — are outside the
+	// client's reach and cannot be zeroized here.
 	Send(proto uint8, comID uint16, data []byte) error
 	// Recv issues an IF-RECV (Security Protocol In) and returns up to size bytes.
 	Recv(proto uint8, comID uint16, size int) ([]byte, error)
@@ -63,7 +67,13 @@ func (c *Client) Discover() (*Discovery, error) {
 // level — the caller must not chainload on error — but on error the caller should
 // re-lock or halt rather than proceed or retry into boot (the Phase 5/6 wiring owns
 // that contract).
+//
+// Unlock consumes pin: it is zeroed before Unlock returns, on success and on every
+// error path. Callers must not reuse the slice and remain responsible for any
+// other copies they hold (e.g. the console input buffer the PIN was read into).
 func (c *Client) Unlock(auth Authority, pin []byte) error {
+	defer zeroize(pin)
+
 	d, err := c.Discover()
 	if err != nil {
 		return err
@@ -130,15 +140,22 @@ func (c *Client) endSession() {
 	if c.tsn == 0 && c.hsn == 0 {
 		return
 	}
-	_ = c.t.Send(protoSecurity, c.comID, encodePacket(c.comID, c.tsn, c.hsn, []byte{tokEndOfSession}))
+	frame := encodePacket(c.comID, c.tsn, c.hsn, []byte{tokEndOfSession})
+	_ = c.t.Send(protoSecurity, c.comID, frame)
+	zeroize(frame)
 	_, _ = c.t.Recv(protoSecurity, c.comID, recvBufSize)
 	c.tsn, c.hsn = 0, 0
 }
 
 // transact sends one method payload in a session packet and returns the decoded
-// response payload.
+// response payload. It consumes payload: both it and the transmitted frame are
+// zeroed before transact returns, on success and on error, because the
+// StartSession payload embeds the host credential.
 func (c *Client) transact(tsn, hsn uint32, payload []byte) ([]byte, error) {
-	if err := c.t.Send(protoSecurity, c.comID, encodePacket(c.comID, tsn, hsn, payload)); err != nil {
+	frame := encodePacket(c.comID, tsn, hsn, payload)
+	zeroize(payload) // already copied into frame; not used again
+	defer zeroize(frame)
+	if err := c.t.Send(protoSecurity, c.comID, frame); err != nil {
 		return nil, fmt.Errorf("opal: send: %w", err)
 	}
 	raw, err := c.t.Recv(protoSecurity, c.comID, recvBufSize)
@@ -147,3 +164,8 @@ func (c *Client) transact(tsn, hsn uint32, payload []byte) ([]byte, error) {
 	}
 	return decodePacket(raw)
 }
+
+// zeroize overwrites b with zeros so secret material — the PIN and the
+// method/packet buffers embedding it — does not linger in memory after use.
+// Copies beyond the transport boundary are out of reach; see Transport.Send.
+func zeroize(b []byte) { clear(b) }
