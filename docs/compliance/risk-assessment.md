@@ -28,7 +28,7 @@ secret).
 |---|---|---|---|---|---|---|---|
 | R-001 | PBA accepts an untrusted EFI image | A6/A5 | I | Medium | Critical | **Low** | Mitigated (imageverify) |
 | R-002 | PBA unlocks SED before authentication succeeds | A1/A7 | C/I | Medium | Critical | **Medium** | Library fail-closed; wiring Phase 5/6 |
-| R-003 | Unlock secret leaks through logs | A1 | C | Medium | Critical | **Medium** | No secret logged; zeroize/scrub TODO |
+| R-003 | Unlock secret leaks through logs | A1 | C | Medium | Critical | **Low** | Mitigated in library (zeroize + log-scrub tested); PIN-entry wiring #51 |
 | R-004 | Attacker modifies PBA policy file | A3 | I | Low | High | **Low** | Mitigated (compiled-in, fail-closed) |
 | R-005 | Rollback to a vulnerable PBA version | A2/A5 | I | Medium | Critical | **High** | Open — anti-rollback not built |
 | R-006 | Malicious update accepted | A8/A2/A5 | I | Medium | Critical | **High** | Open — update/signing not built |
@@ -70,10 +70,32 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 - **Threat/path:** secret/PIN/session data written to console/serial.
 - **Mitigations:** "never log secrets" is a non-negotiable rule (CLAUDE.md,
   baseline §11); `internal/opal` logs nothing (it returns errors without the PIN/
-  session material). Buffer zeroization + a log-scrub assertion are still TODO for
-  the Phase 5/6 wiring.
-- **Residual:** Medium — no secret is logged today, but zeroization/scrub tests are
-  pending. **Tests:** planned (log-scrub assertion). **Evidence:** ADR-0004.
+  session material). All client-side PIN-bearing buffers — the caller's `pin`
+  slice, the StartSession method payload, and every transmitted ComPacket frame —
+  are zeroized on success **and on every failure path** (wrong PIN, pre-auth
+  failure, transport failure mid-session, malformed response after the PIN was
+  transmitted); append-reallocation after the PIN bytes (which would strand a
+  stale copy in an unreachable backing array) is prevented by a 64-byte
+  pre-reservation budget pinned by a regression test at the real call site. A
+  log-scrub test runs the full unlock exchange with stdout/stderr captured at the
+  **file-descriptor level** (so the runtime's builtin `print`/`println` is caught
+  too) and asserts opal-layer silence plus PIN-free error text across raw,
+  lower/upper hex, std/url/raw base64, and Go decimal-slice (`%v`) encodings.
+  Both leak assertions are mutation-verified (injected `println`/`fmt.Printf` PIN
+  leaks and PIN-bearing error text each fail the suite).
+- **Residual:** Low — remaining exposures: copies beyond the transport boundary
+  (firmware command buffers, device DMA) are out of the client's reach (existing
+  evil-maid residual, threat model §6.2); zeroization relies on the Go compiler
+  not dead-store-eliminating `clear()` (true with the current toolchain, not a
+  language guarantee); transient register/temporary copies are unscrubbed;
+  swap/crash-dump exposure does not apply pre-boot under TamaGo. **Open scope:**
+  the Phase 6 boot-path wiring must zeroize the console PIN-*input* buffer (#51
+  item 2) — #51 item 1 closes the library layer only.
+- **Tests:** `TestUnlockZeroizesSecrets`, `TestTransactZeroizesMethodPayload`,
+  `TestStartSessionGrowBudget`, `TestBuilderGrowPreventsReallocation`,
+  `TestUnlockEmitsNoConsoleOutput`. **Evidence:** ADR-0004; #51 item 1
+  (commits 8946c93/25c1229/32e8401); independent security review (pass, code
+  approved).
 
 ### R-004 — Attacker modifies PBA policy file
 - **Threat/path:** tamper with the boot policy to redirect/relax validation.
@@ -169,3 +191,4 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 | 2026-06-08 | Initial risk assessment (#5): R-001..R-010 from baseline §9 plus R-011 (trust-anchor staleness), R-012 (SB-off TOCTOU, #46), R-013 (ignore-expiry, ADR-0007/#48). Reflects Phase 3 mitigations. |
 | 2026-06-08 | Phase 4 (Opal unlock library + simulator, ADR-0004): R-009 → Low (Opal response parsers fuzzed + fail closed); R-002/R-003 High → Medium (unlock flow fail-closed by construction, no secret logged) — both still pending boot-path wiring (Phase 5/6) and hardware (Phase 8); R-008 now sets MBRDone in the unlock flow. |
 | 2026-06-08 | Phase 5 (UEFI Storage Security transport, ADR-0008): R-006 mitigations updated to cover the pinned first-party `walterchris/go-boot` fork (tag + go.sum, minimal additive patch). |
+| 2026-06-10 | #51 item 1 (Phase 5/6 gate from the Phase 4 security review): R-003 Medium → Low — all client-side PIN-bearing buffers zeroized on success and all failure paths, append-reallocation guarded by a tested 64-byte grow budget; fd-level log-scrub test proves opal-layer silence and PIN-free error text (raw/hex/base64/decimal-slice), mutation-verified. Remaining residuals recorded (firmware/DMA-side copies §6.2, compiler dead-store assumption, transient register copies); console PIN-input zeroization stays open for the Phase 6 wiring (#51 item 2). |
