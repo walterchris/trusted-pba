@@ -4,9 +4,11 @@ Per the [compliance baseline §10](../compliance-and-secure-development-baseline
 This is a **living document**: every security-relevant change must update it or
 explicitly confirm "no change" (baseline §10, §23).
 
-- **Status:** covers the product through **Phase 3** (boot manager, Secure Boot
-  detection + enforcement, PBA policy engine, second-stage image verification).
-  Opal/SED unlock (Phases 4–6), the shim-like loader wrapper (Phase 7), real
+- **Status:** covers the product through **Phase 6** (boot manager, Secure Boot
+  detection + enforcement, PBA policy engine, second-stage image verification,
+  Opal/SED unlock wired into the boot path over the UEFI Storage Security
+  transport, and the QEMU MockOpalDxe end-to-end matrix — Phases 4–6,
+  ADR-0004/0008/0009). The shim-like loader wrapper (Phase 7), real
   hardware (Phase 8), and the update/release-signing pipeline are **planned**;
   their assets and adversaries are modelled here with mitigations marked
   *planned/deferred* so the gaps are explicit.
@@ -53,9 +55,12 @@ The ten core assets from baseline §10, with current location/status:
   EFI System Partition (attacker-writable storage) and must validate it before
   transferring control (`internal/imageverify` for `pba` mode; firmware revalidates
   for `firmware` mode).
-- **TB3 PBA → SED (Opal transport).** Planned. The Opal layer talks to the drive
-  through the abstract `TCGTransport` interface; the drive is untrusted until a
-  session authenticates.
+- **TB3 PBA → SED (Opal transport).** Live. The Opal layer talks to the drive
+  through the abstract `TCGTransport` interface, implemented over the UEFI
+  Storage Security Command Protocol (`internal/transport`, Phase 5, ADR-0008)
+  and exercised end-to-end in the boot path by the QEMU MockOpalDxe integration
+  matrix (Phase 6, #22); the drive is untrusted until a session authenticates.
+  Real-drive validation pending (Phase 8).
 - **TB4 Build/release → artifact.** The embedded policy and trust materials cross
   from the build into the signed binary; their integrity rests on pinning +
   recorded hashes + the (planned) release-signing gate.
@@ -72,7 +77,8 @@ The ten core assets from baseline §10, with current location/status:
   (`internal/truststore.stripAuth2`/`parseDBX`).
 - UEFI variable reads (`SecureBoot`, `SetupMode`) and boot-service calls
   (`LoadImage`/`StartImage`/`GetTime`/`ResetSystem`).
-- Planned: TCG Opal response parsing (Phase 4) — **fuzz-relevant**.
+- TCG Opal response parsing (`internal/opal`, Phase 4) — fails closed,
+  **fuzzed** (`FuzzResponseParse`).
 
 ## 5. Assumptions
 
@@ -289,3 +295,4 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock library + Phase 6 boot w
 | 2026-06-10 | Phase 6 boot-path wiring (#22, #51 item 2, ADR-0009): policy-gated `sed_unlock` (`required`\|`none`, absence = required, `none` logged loudly) drives `opal.Unlock` over the UEFI transport before any chainload; any error — incl. partial unlock and missing Storage Security device — terminates via the on-error action, no retry/fallback. A1/A7 move to *wired*; MVP compiled-in PIN residual documented (ADR-0009). QEMU MockOpalDxe end-to-end is the next Phase 6 ticket. |
 | 2026-06-10 | go-boot fork `v1.6.2-tpba.3` (#22, ADR-0008 Amendment 2026-06-10): two UEFI ABI fixes found by the integration matrix's first real run — SSC slot-dispatch double-dereference in the additive `storagesecurity.go` (+ fail-closed NULL-slot check) and the `callFn` stack-alignment pad in upstream's `uefi/uefi.s` (latent upstream bug; also affects upstream SNP Transmit/Receive). §6.6 updated: the fork patch set is no longer purely additive — one reviewed upstream-file edit, to be submitted upstream. Review record: `evidence/security-review-records/2026-06-10-go-boot-tpba3-abi-fixes.md`. |
 | 2026-06-10 | Phase 6 QEMU MockOpalDxe integration matrix (#22): six scenarios (unlock-chainload, auth-fail, fail-mbrdone, fail-after-unlock partial unlock, no-driver, secure-boot) exercise the boot path end-to-end over the real UEFI Storage Security protocol; real `mock-opal-integration` CI job; release artifacts gated on a non-`none` default SED policy. Security review found and fixed a harness false-PASS (FORBID dead after the final REQUIRE) — grace-window drain + `harness-selftest.sh` + end-to-end mutation proof. §6.2 and test mapping updated. Review record: `evidence/security-review-records/2026-06-10-mock-opal-integration-matrix-22.md`. |
+| 2026-06-10 | Phase 6 wrap-up (#60 merged; epics #22/#19 closed): staleness refresh only. Status header updated from "through Phase 3" to coverage through Phase 6 (unlock wired + QEMU e2e); TB3 (PBA → SED transport) updated from *planned* to live (Phase 5 transport, Phase 6 e2e, hardware pending Phase 8); §4 Opal response parsing no longer *planned* (shipped + fuzzed in Phase 4). No new threats, no mitigation or risk changes. |
