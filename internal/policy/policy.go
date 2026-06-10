@@ -30,6 +30,40 @@ type BootEntry struct {
 	Validation ValidationMode `json:"validation"`
 }
 
+// SEDUnlock is whether the PBA must unlock a TCG Opal SED before chainloading.
+// There is no implicit behavior: an absent field means SEDUnlockRequired (fail
+// closed), and skipping the unlock requires the explicit SEDUnlockNone statement,
+// which the boot path logs loudly (never a silent fallback). See ADR-0009.
+type SEDUnlock string
+
+const (
+	// SEDUnlockRequired means the boot path must successfully unlock the SED
+	// (Discovery0, authenticated session, range unlock, MBRDone) before any
+	// chainload. This is the default when the field is absent.
+	SEDUnlockRequired SEDUnlock = "required"
+	// SEDUnlockNone means this deployment has no Opal device to unlock (e.g.
+	// non-SED machines, virtual tests without a Storage Security device). It is
+	// an explicit, logged policy decision — never an implicit fallback.
+	SEDUnlockNone SEDUnlock = "none"
+)
+
+// PIN is an SED credential as raw bytes. It decodes from a plain JSON string
+// (not the base64 a []byte field would require) so the compiled-in test policy
+// stays human-readable, and is held as bytes — not a string — so the boot path
+// can zeroize it after use. MVP only: the compiled-in policy carrying the PIN is
+// replaced by real authentication before any production deployment (ADR-0009).
+type PIN []byte
+
+// UnmarshalJSON decodes a JSON string into the PIN bytes.
+func (p *PIN) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return fmt.Errorf("sed_pin must be a string: %w", err)
+	}
+	*p = PIN(s)
+	return nil
+}
+
 // OnError is the terminal action taken on any fail-closed decision. Every option
 // stays fail-closed: it MUST NOT return control to the firmware boot manager / next
 // NVRAM boot entry (CLAUDE.md: never silently fall back to insecure behavior).
@@ -51,6 +85,12 @@ type Policy struct {
 	Entries           []BootEntry `json:"entries"`
 	// OnError is the action on any fail-closed decision; empty means OnErrorHalt.
 	OnError OnError `json:"on_error"`
+	// SEDUnlock gates the SED unlock step; empty means SEDUnlockRequired (fail
+	// closed — only an explicit "none" skips the unlock).
+	SEDUnlock SEDUnlock `json:"sed_unlock"`
+	// SEDPIN is the Admin1 credential for the unlock. MVP: the compiled-in test
+	// policy carries it (plan §7.1); the boot path consumes and zeroizes it.
+	SEDPIN PIN `json:"sed_pin"`
 }
 
 // Sentinel errors.
@@ -82,6 +122,22 @@ func Parse(data []byte) (*Policy, error) {
 	case OnErrorHalt, OnErrorShutdown, OnErrorReboot:
 	default:
 		return nil, fmt.Errorf("unknown on_error %q", p.OnError)
+	}
+	switch p.SEDUnlock {
+	case "":
+		p.SEDUnlock = SEDUnlockRequired // absence = required: fail closed
+	case SEDUnlockRequired, SEDUnlockNone:
+	default:
+		return nil, fmt.Errorf("unknown sed_unlock %q", p.SEDUnlock)
+	}
+	// MVP: the policy is the PIN source, so "required" without a PIN can never
+	// unlock — reject it at parse time instead of failing at the drive. "none"
+	// must not embed a stray credential.
+	if p.SEDUnlock == SEDUnlockRequired && len(p.SEDPIN) == 0 {
+		return nil, errors.New("sed_unlock is required but sed_pin is empty")
+	}
+	if p.SEDUnlock == SEDUnlockNone && len(p.SEDPIN) != 0 {
+		return nil, errors.New("sed_pin set but sed_unlock is none")
 	}
 	for i, e := range p.Entries {
 		if e.Name == "" || e.Path == "" {
