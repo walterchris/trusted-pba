@@ -6,7 +6,7 @@ import (
 )
 
 func TestParseValid(t *testing.T) {
-	p, err := Parse([]byte(`{"require_secure_boot":true,"entries":[{"name":"win","path":"EFI/Microsoft/Boot/bootmgfw.efi","validation":"firmware"}]}`))
+	p, err := Parse([]byte(`{"require_secure_boot":true,"sed_unlock":"none","entries":[{"name":"win","path":"EFI/Microsoft/Boot/bootmgfw.efi","validation":"firmware"}]}`))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -19,13 +19,21 @@ func TestParseFailsClosed(t *testing.T) {
 	bad := map[string]string{
 		"malformed json":     `{`,
 		"empty object":       `{}`,
-		"no entries":         `{"entries":[]}`,
-		"missing path":       `{"entries":[{"name":"x","validation":"firmware"}]}`,
-		"missing name":       `{"entries":[{"path":"a","validation":"pba"}]}`,
-		"unknown validation": `{"entries":[{"name":"x","path":"a","validation":"magic"}]}`,
-		"unknown field":      `{"entries":[{"name":"x","path":"a","validation":"pba","extra":1}]}`,
+		"no entries":         `{"sed_unlock":"none","entries":[]}`,
+		"missing path":       `{"sed_unlock":"none","entries":[{"name":"x","validation":"firmware"}]}`,
+		"missing name":       `{"sed_unlock":"none","entries":[{"path":"a","validation":"pba"}]}`,
+		"unknown validation": `{"sed_unlock":"none","entries":[{"name":"x","path":"a","validation":"magic"}]}`,
+		"unknown field":      `{"sed_unlock":"none","entries":[{"name":"x","path":"a","validation":"pba","extra":1}]}`,
 		"wrong type":         `{"require_secure_boot":"yes","entries":[]}`,
-		"unknown on_error":   `{"on_error":"explode","entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"unknown on_error":   `{"on_error":"explode","sed_unlock":"none","entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		// SED unlock gate: only the explicit values are accepted; "required"
+		// (incl. absent = required) demands a PIN in the MVP policy-as-PIN-source
+		// model, and "none" must not embed a stray credential.
+		"unknown sed_unlock":      `{"sed_unlock":"maybe","entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"required without pin":    `{"sed_unlock":"required","entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"absent unlock means req": `{"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"none with pin":           `{"sed_unlock":"none","sed_pin":"correct horse","entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"sed_pin wrong json type": `{"sed_unlock":"required","sed_pin":1,"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 	}
 	for name, in := range bad {
 		if _, err := Parse([]byte(in)); err == nil {
@@ -36,7 +44,7 @@ func TestParseFailsClosed(t *testing.T) {
 
 func TestParseOnError(t *testing.T) {
 	// Absent on_error defaults to halt (the safest fail-closed action).
-	p, err := Parse([]byte(`{"entries":[{"name":"x","path":"a","validation":"pba"}]}`))
+	p, err := Parse([]byte(`{"sed_unlock":"none","entries":[{"name":"x","path":"a","validation":"pba"}]}`))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -45,7 +53,7 @@ func TestParseOnError(t *testing.T) {
 	}
 
 	for _, mode := range []OnError{OnErrorHalt, OnErrorShutdown, OnErrorReboot} {
-		in := `{"on_error":"` + string(mode) + `","entries":[{"name":"x","path":"a","validation":"pba"}]}`
+		in := `{"on_error":"` + string(mode) + `","sed_unlock":"none","entries":[{"name":"x","path":"a","validation":"pba"}]}`
 		got, err := Parse([]byte(in))
 		if err != nil {
 			t.Errorf("on_error %q: unexpected error %v", mode, err)
@@ -54,6 +62,37 @@ func TestParseOnError(t *testing.T) {
 		if got.OnError != mode {
 			t.Errorf("on_error = %q, want %q", got.OnError, mode)
 		}
+	}
+}
+
+func TestParseSEDUnlock(t *testing.T) {
+	// Explicit "required" with a PIN: the PIN bytes are carried for the boot
+	// path (MVP compiled-in credential, shared-spec test value; ADR-0009).
+	p, err := Parse([]byte(`{"sed_unlock":"required","sed_pin":"correct horse","entries":[{"name":"x","path":"a","validation":"pba"}]}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if p.SEDUnlock != SEDUnlockRequired || string(p.SEDPIN) != "correct horse" {
+		t.Errorf("got sed_unlock=%q pin len %d, want required with the test PIN", p.SEDUnlock, len(p.SEDPIN))
+	}
+
+	// Absence = required (fail closed): the value must never silently become
+	// "none". With a PIN present the policy parses and is required.
+	p, err = Parse([]byte(`{"sed_pin":"correct horse","entries":[{"name":"x","path":"a","validation":"pba"}]}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if p.SEDUnlock != SEDUnlockRequired {
+		t.Errorf("absent sed_unlock = %q, want %q (fail closed)", p.SEDUnlock, SEDUnlockRequired)
+	}
+
+	// Explicit "none" (no PIN) is the only way to skip the unlock.
+	p, err = Parse([]byte(`{"sed_unlock":"none","entries":[{"name":"x","path":"a","validation":"pba"}]}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if p.SEDUnlock != SEDUnlockNone || len(p.SEDPIN) != 0 {
+		t.Errorf("got sed_unlock=%q pin len %d, want none without a PIN", p.SEDUnlock, len(p.SEDPIN))
 	}
 }
 

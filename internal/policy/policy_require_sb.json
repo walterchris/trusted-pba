@@ -1,5 +1,6 @@
 {
   "require_secure_boot": true,
+  "sed_unlock": "none",
   "entries": [
     {
       "name": "test-fixture",
