@@ -1,0 +1,13 @@
+{
+  "require_secure_boot": false,
+  "sed_unlock": "required",
+  "sed_pin": "correct horse",
+  "on_error": "halt",
+  "entries": [
+    {
+      "name": "test-fixture",
+      "path": "EFI/TEST/TESTAPP.EFI",
+      "validation": "firmware"
+    }
+  ]
+}
