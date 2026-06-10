@@ -1,4 +1,4 @@
-//go:build policytest && !pbatest
+//go:build policytest && !pbatest && !sedtest
 
 package policy
 
