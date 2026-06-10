@@ -27,7 +27,7 @@ secret).
 | ID | Risk | Asset | C/I/A | Likelihood | Severity | Residual | Status |
 |---|---|---|---|---|---|---|---|
 | R-001 | PBA accepts an untrusted EFI image | A6/A5 | I | Medium | Critical | **Low** | Mitigated (imageverify) |
-| R-002 | PBA unlocks SED before authentication succeeds | A1/A7 | C/I | Medium | Critical | **Medium** | Library fail-closed; boot-path gate wired (ADR-0009); QEMU e2e + hardware pending |
+| R-002 | PBA unlocks SED before authentication succeeds | A1/A7 | C/I | Medium | Critical | **Medium** | Library fail-closed; boot-path gate wired (ADR-0009); QEMU MockOpalDxe e2e in place, mutation-proven (#22); hardware pending (Phase 8) |
 | R-003 | Unlock secret leaks through logs | A1 | C | Medium | Critical | **Low** | Mitigated in library (zeroize + log-scrub tested); PIN-entry wiring #51 |
 | R-004 | Attacker modifies PBA policy file | A3 | I | Low | High | **Low** | Mitigated (compiled-in, fail-closed) |
 | R-005 | Rollback to a vulnerable PBA version | A2/A5 | I | Medium | Critical | **High** | Open — anti-rollback not built |
@@ -66,11 +66,26 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
   hard failure, and any unlock error — including a partial unlock — terminates
   via the on-error action with no retry and no fallback to chainload (#51 item 2).
   Skipping the unlock needs an explicit, loudly-logged `"sed_unlock": "none"`.
-- **Residual:** Medium — wiring host-tested against the native simulator; QEMU
-  MockOpalDxe end-to-end (next Phase 6 ticket) + hardware (Phase 8) pending.
+  **QEMU end-to-end** (#22): the MockOpalDxe integration matrix drives the wired
+  boot path over the real UEFI Storage Security protocol — unlock-chainload and
+  secure-boot positive scenarios (tied to driver dispatch/auth/unlock/MBRDone
+  markers, so a skipped driver cannot false-pass), and auth-fail / fail-mbrdone /
+  fail-after-unlock (partial unlock) / no-driver negative scenarios with FORBID
+  assertions on the chainload markers, **mutation-proven** (a fail-open PBA
+  mutant fails the matrix; harness FORBID liveness re-proven by
+  `harness-selftest.sh` on every run).
+- **Residual:** Medium — narrows to **hardware-pending (Phase 8)**: local 6/6
+  matrix runs plus the mutation proof are in evidence; the green
+  `mock-opal-integration` CI run on the PR completes the runs-in-CI claim
+  (pending at the time of writing). Real-drive divergence remains tracked under
+  R-007/R-008/R-010.
   **Tests:** `TestUnlockHappyPath`, `TestUnlockFailsClosed/*`;
-  `cmd/pba` `TestUnlockSED*`; `internal/policy` `TestParseSEDUnlock`.
-  **Evidence:** ADR-0004, ADR-0009. **Owner:** Security Owner.
+  `cmd/pba` `TestUnlockSED*`; `internal/policy` `TestParseSEDUnlock`;
+  `mock-opal-matrix` (6 scenarios) + `harness-selftest.sh` (CI job
+  `mock-opal-integration`).
+  **Evidence:** ADR-0004, ADR-0009;
+  `evidence/security-review-records/2026-06-10-mock-opal-integration-matrix-22.md`.
+  **Owner:** Security Owner.
 
 ### R-003 — Unlock secret leaks through logs
 - **Threat/path:** secret/PIN/session data written to console/serial.
@@ -130,13 +145,23 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 - **Threat/path:** crafted PBA/policy/trust-material update via a future update
   channel, a compromised dependency, CI runner, or signing key.
 - **Mitigations:** pinned deps + vendored materials with recorded SHA-256/commit;
-  the `walterchris/go-boot` fork (ADR-0008) pinned by tag + `go.sum` with a minimal
-  additive patch over upstream v1.6.2; protected `main`, PR-only, signed commits;
-  ephemeral CI test keys (no prod keys in CI). **Planned:** signed updates, SLSA
-  provenance, key management, vuln/SBOM scan covering the fork (#9, #10, #27).
-- **Residual:** High until the pipeline lands. **Tests:** `TestLoad`,
+  the `walterchris/go-boot` fork (ADR-0008) pinned by tag (`v1.6.2-tpba.3`) +
+  `go.sum` — its patch set over upstream v1.6.2 is additive files **plus exactly
+  one functional edit to an upstream file** (the `callFn` stack-alignment fix in
+  `uefi/uefi.s`, a latent upstream ABI bug; ADR-0008 Amendment 2026-06-10), a
+  tiny, individually security-reviewed diff to be submitted upstream; protected
+  `main`, PR-only, signed commits; ephemeral CI test keys (no prod keys in CI).
+  **Planned:** signed updates, SLSA provenance, key management, vuln/SBOM scan
+  covering the fork (#9, #10, #27).
+- **Residual:** High until the pipeline lands. Accepted sub-residual (TB5, #22
+  integration review finding 5): the `mock-opal-integration` CI job's EDK2 cache
+  verification is **ref-level only** — a tampered cached tree whose recorded HEAD
+  still matches would go undetected; bounded by GitHub Actions' same-repo cache
+  scoping. **Tests:** `TestLoad`,
   `TestRealMicrosoftSignedImage` (CI-only, `real-image-verify` job; skips without
-  `TPBA_REAL_SHIM`). **Evidence:** `PROVENANCE.md`.
+  `TPBA_REAL_SHIM`). **Evidence:** `PROVENANCE.md`;
+  `evidence/security-review-records/2026-06-10-go-boot-tpba3-abi-fixes.md`;
+  `evidence/security-review-records/2026-06-10-mock-opal-integration-matrix-22.md`.
 
 ### R-007 — Windows Boot Manager chainload fails after unlock
 - **Threat/path:** handoff to the OS loader fails post-unlock → unbootable system.
@@ -196,7 +221,8 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
   under R-009/#56.
 - **Tests:** `TestVerifyAndLoadVerifiedBufferInvariant` (ordering + single-read +
   reassignment ban, mutation-verified). **Evidence:** `cmd/pba/main.go`
-  `verifyAndLoad`; fork tag `v1.6.2-tpba.2` pinned in `go.sum`;
+  `verifyAndLoad`; fork pinned in `go.sum` (`LoadImageBuffer` landed in
+  `v1.6.2-tpba.2`; current pin `v1.6.2-tpba.3`, ADR-0008);
   `evidence/security-review-records/2026-06-10-chainload-verified-buffer-46.md`.
 
 ### R-013 — Expired-but-valid signing key reused
@@ -219,3 +245,5 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 | 2026-06-10 | #51 item 1 (Phase 5/6 gate from the Phase 4 security review): R-003 Medium → Low — all client-side PIN-bearing buffers zeroized on success and all failure paths, append-reallocation guarded by a tested 64-byte grow budget; fd-level log-scrub test proves opal-layer silence and PIN-free error text (raw/hex/base64/decimal-slice), mutation-verified. Remaining residuals recorded (firmware/DMA-side copies §6.2, compiler dead-store assumption, transient register copies); console PIN-input zeroization stays open for the Phase 6 wiring (#51 item 2). |
 | 2026-06-10 | R-012 Open → Mitigated (#46): `verifyAndLoad` chainloads from the verified in-memory buffer via the fork's `LoadImageBuffer` (pin bumped to `v1.6.2-tpba.2`), closing the SB-off verify-then-load TOCTOU; invariant test `TestVerifyAndLoadVerifiedBufferInvariant`; review record `evidence/security-review-records/2026-06-10-chainload-verified-buffer-46.md`. Imageverify fuzz follow-up noted under R-009 (#56). |
 | 2026-06-10 | Phase 6 boot-path wiring (#22, #51 item 2, ADR-0009): R-002 mitigation extends from library to boot path — policy-gated `sed_unlock` (absence = required, explicit loud `none`), hard failure on missing Storage Security device, partial-unlock/any error → on-error action with no retry/fallback; residual stays Medium pending QEMU MockOpalDxe e2e + hardware. R-003: wiring holds no PIN copy (policy holder cleared, every path tested); MVP compiled-in-PIN residual recorded (binary-embedded JSON + decoder string copy, test-only credential, replaced before production). |
+| 2026-06-10 | go-boot fork `v1.6.2-tpba.3` (#22, ADR-0008 Amendment 2026-06-10): R-006 mitigation wording corrected — the fork patch set is no longer "minimal additive": it carries one functional upstream-file edit (the `callFn` stack-alignment fix in `uefi/uefi.s`, latent upstream ABI bug, to be submitted upstream) alongside the additive files; SSC slot-dispatch fix + fail-closed NULL-slot check in the additive `storagesecurity.go`. R-012 evidence pin reference updated to the current tag. Review record: `evidence/security-review-records/2026-06-10-go-boot-tpba3-abi-fixes.md`. |
+| 2026-06-10 | Phase 6 QEMU MockOpalDxe integration matrix (#22): R-002 QEMU e2e in place — six-scenario matrix (positive unlock-chainload/secure-boot tied to driver markers; negative auth-fail/fail-mbrdone/fail-after-unlock/no-driver with mutation-proven FORBIDs), real `mock-opal-integration` CI job, release-policy gate; residual stays Medium but narrows to hardware-pending (Phase 8) — local 6/6 + mutation proof in evidence, green CI run on the PR completes the runs-in-CI claim. Harness false-PASS (FORBID dead after final REQUIRE) found, fixed, self-tested. R-006/TB5 accepted sub-residual recorded: EDK2 cache verification is ref-level only. Review record: `evidence/security-review-records/2026-06-10-mock-opal-integration-matrix-22.md`. |
