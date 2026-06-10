@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // TCG Storage stream encoding — control tokens (TCG Storage Architecture Core
@@ -37,6 +38,12 @@ func lo8(v int) byte { return byte(v) } //nolint:gosec // low byte of a bounded 
 type builder struct{ buf []byte }
 
 func (b *builder) control(tok byte) { b.buf = append(b.buf, tok) }
+
+// grow ensures capacity for at least n more bytes so that subsequent appends up
+// to that size cannot reallocate the backing array. Call it before encoding
+// secret-bearing atoms: a reallocation after the secret is written would strand
+// a stale copy in an unreachable array that zeroize can no longer reach.
+func (b *builder) grow(n int) { b.buf = slices.Grow(b.buf, n) }
 
 // uint appends an unsigned integer atom using the shortest encoding.
 func (b *builder) uint(v uint64) {
