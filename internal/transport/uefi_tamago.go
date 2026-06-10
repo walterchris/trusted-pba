@@ -44,7 +44,10 @@ func New() (*UEFI, error) {
 	return &UEFI{ssc: ssc, mediaID: 0, timeout: defaultTimeout}, nil
 }
 
-// Send issues an IF-SEND for the given security protocol and ComID.
+// Send issues an IF-SEND for the given security protocol and ComID. Per the
+// opal.Transport retention contract, it makes no Go-side copy of data and does
+// not retain it: the caller's buffer is handed to the firmware call directly
+// (firmware/DMA-side copies are beyond zeroization reach; see opal.Transport).
 func (u *UEFI) Send(proto uint8, comID uint16, data []byte) error {
 	if err := u.ssc.SendData(u.mediaID, u.timeout, proto, comID, data); err != nil {
 		return fmt.Errorf("transport: IF-SEND proto=%#x comID=%#x: %w", proto, comID, err)

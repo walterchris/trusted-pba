@@ -2,12 +2,13 @@
 
 // Command pba is the Trusted PBA UEFI application.
 //
-// Phase 3 boot manager: it boots as a UEFI x86_64 application under TamaGo, reads
-// the firmware Secure Boot state, loads the compiled-in boot policy, enforces it
-// (incl. an optional Secure-Boot-required gate), selects a target, and chainloads
-// it — failing closed on any error. Validation mode "firmware" lets the firmware
-// validate the image (Windows path); "pba" validates the image itself with
-// internal/imageverify against the embedded Secure Boot trust store before loading.
+// It boots as a UEFI x86_64 application under TamaGo, reads the firmware Secure
+// Boot state, loads the compiled-in boot policy, enforces it (incl. an optional
+// Secure-Boot-required gate), unlocks the Opal SED when the policy demands it
+// (sed_unlock, ADR-0009), selects a target, and chainloads it — failing closed on
+// any error. Validation mode "firmware" lets the firmware validate the image
+// (Windows path); "pba" validates the image itself with internal/imageverify
+// against the embedded Secure Boot trust store before loading.
 //
 // The UEFI board layer (CPU + serial init, EFI System Table parsing, heap setup)
 // is provided by go-boot's uefi/x64 package, which performs that bring-up
@@ -22,15 +23,15 @@ import (
 
 	"github.com/walterchris/go-boot/uefi"
 	"github.com/walterchris/go-boot/uefi/x64"
+	"github.com/walterchris/trusted-pba/internal/opal"
 	"github.com/walterchris/trusted-pba/internal/policy"
 	"github.com/walterchris/trusted-pba/internal/secureboot"
+	"github.com/walterchris/trusted-pba/internal/transport"
 	"github.com/walterchris/trusted-pba/internal/truststore"
 )
 
 // Version is overridden at link time via -ldflags "-X 'main.Version=...'".
 var Version = "dev"
-
-const banner = "TRUSTED-PBA"
 
 // bootPolicy is go-boot's LoadImage "boot" argument: 0 means BootPolicy = FALSE —
 // the image is loaded by us, not via the firmware boot-manager device-path policy.
@@ -87,10 +88,16 @@ func secureBootEnforcing() bool {
 	return st.Enforcing()
 }
 
-// run enforces the policy, selects a target, and chainloads it.
+// run enforces the policy, unlocks the SED when required, selects a target, and
+// chainloads it. The unlock comes before any target selection/chainload: on an
+// unlock error this returns — main terminates via the on-error action — and never
+// proceeds or retries into boot (#51 item 2).
 func run(pol *policy.Policy, enforcing bool) error {
 	if err := pol.CheckSecureBoot(enforcing); err != nil {
 		return fmt.Errorf("policy: %w", err)
+	}
+	if err := unlockSED(pol, newUEFITransport, out); err != nil {
+		return err
 	}
 	entry, err := pol.Select()
 	if err != nil {
@@ -98,6 +105,17 @@ func run(pol *policy.Policy, enforcing bool) error {
 	}
 	fmt.Fprintf(out, "%s: target %q (%s) via %s\r\n", banner, entry.Name, entry.Path, entry.Validation)
 	return chainload(entry)
+}
+
+// newUEFITransport adapts transport.New to the opal.Transport constructor shape
+// unlockSED takes. It fails closed when the firmware exposes no Storage Security
+// device.
+func newUEFITransport() (opal.Transport, error) {
+	t, err := transport.New()
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
 }
 
 // chainload dispatches on the entry's validation mode. All error returns are
