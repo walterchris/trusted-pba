@@ -19,6 +19,10 @@
 set -euo pipefail
 
 EDK2_TAG="edk2-stable202605"   # pinned upstream release (bump deliberately)
+# Commit the tag must resolve to (tags are mutable, commits are not). Update
+# together with EDK2_TAG: git ls-remote <repo> "refs/tags/<tag>^{}" (or the
+# bare tag if lightweight).
+EDK2_COMMIT="b03a21a63e3bd001f52c527e5a57feddb53a690b"
 EDK2_REPO="https://github.com/tianocore/edk2.git"
 TOOLCHAIN="GCC"
 TARGET="RELEASE"
@@ -34,6 +38,17 @@ if [ ! -e "$EDK2_DIR/edksetup.sh" ]; then
 	mkdir -p "$CACHE_DIR"
 	git clone --depth 1 --branch "$EDK2_TAG" "$EDK2_REPO" "$EDK2_DIR"
 fi
+
+# Verify the checkout (fresh or cached) is the pinned commit, not merely
+# whatever the tag points at today.
+EDK2_HEAD="$(git -C "$EDK2_DIR" rev-parse 'HEAD^{commit}')"
+if [ "$EDK2_HEAD" != "$EDK2_COMMIT" ]; then
+	echo "error: $EDK2_DIR is at commit $EDK2_HEAD," >&2
+	echo "       but $EDK2_TAG is pinned to $EDK2_COMMIT" >&2
+	echo "       (tag moved upstream, or the cache is stale — remove it and re-run)" >&2
+	exit 1
+fi
+
 git -C "$EDK2_DIR" submodule update --init --depth 1 \
 	BaseTools/Source/C/BrotliCompress/brotli \
 	MdePkg/Library/MipiSysTLib/mipisyst
