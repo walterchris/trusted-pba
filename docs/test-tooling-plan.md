@@ -137,11 +137,36 @@ compliance baseline §17–18.
 
 ## 7. Tooling-specific open questions
 
-- Does OVMF reliably load an external `MockOpalDxe.efi` from the ESP before the PBA,
-  or must it be built into the OVMF image?
+- ~~Does OVMF reliably load an external `MockOpalDxe.efi` from the ESP before the PBA,
+  or must it be built into the OVMF image?~~ **Answered — see decision below.**
 - What is the minimum the EDK2 mock must implement for the PBA to consider a device
   a valid Opal target (Discovery0 feature set, ComID handling)?
 - For the later QEMU model: which device class (NVMe vs AHCI) gives the best OVMF
   SSC-protocol support with the least patching?
 - Can the QEMU model faithfully reproduce in-session MBRDone, or is that ultimately
   a hardware-only validation?
+
+### Decision (spike, 2026-06-10): load `MockOpalDxe.efi` from the ESP via `Driver0000`/`DriverOrder`
+
+Do **not** build it into OVMF and do **not** introduce an EFI shell. Verified
+empirically on stock Fedora `edk2-ovmf` (20250812) through the existing harness: a
+`Driver0000` load option with a short-form file-path device path
+(`\EFI\...\MOCKOPALDXE.EFI`) is dispatched by BDS before any `Boot####` option,
+both in Setup Mode and under enforcing Secure Boot when the driver is db-signed.
+`virt-fw-vars`' Python library (`virt.firmware`) writes the entry offline into the
+per-run VARS copy in ~20 lines, fitting the existing `OVMF_VARS` override and
+`sbsign` flow of `secureboot-matrix.sh`. Building the mock into OVMF would force us
+to maintain a forked firmware build and would bypass Secure Boot image verification
+for the driver; a `startup.nsh`/shell approach would replace the harness's direct
+`BOOTX64.EFI` boot path and put a signed scriptable shell into the trust set.
+
+**Fail-closed caveat:** under enforcing Secure Boot an unsigned/wrong-key driver is
+*silently skipped* and boot continues, so Phase 6 tests must REQUIRE a
+driver-emitted serial marker (and the PBA's protocol-located marker) so a rejected
+mock can never produce a false pass.
+
+**Build prerequisites for Phase 6** (beyond what the harness already uses): a
+pinned edk2 source checkout (release tag, submodule or CI clone) plus BaseTools —
+either distro `edk2-tools` (prebuilt `GenFw`/`GenFv`) or `make -C BaseTools` in the
+checkout. Toolchain deps (gcc/g++, make, nasm, iasl, libuuid-devel, python3) are
+standard.
