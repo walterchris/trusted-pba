@@ -32,7 +32,19 @@ result; no state changes on any failure.
 
 Intentional divergences from `MockTPer`: faults are selected by a UEFI variable
 instead of `Inject()` (and cover different shapes — see below); state persists
-for the lifetime of the boot (no re-arm).
+for the lifetime of the boot (no re-arm); request token streams are capped at
+`MAX_TOKENS` (64) tokens and staged responses at `RESP_MAX` (256) bytes —
+anything larger fails closed (`NOT_AUTHORIZED` result), which real PBA traffic
+never approaches.
+
+Known gap: there is no `fail-garbled` fault shape yet (the equivalent of the Go
+mock's `FaultMalformed`, which returns garbage bytes on IF-RECV), so the PBA's
+tokenizer fail-closed path is QEMU-untested until one is added.
+
+Note on `fail-after-unlock` (matches `MockTPer.resp` retention): after the
+fault trips, only IF-SEND fails — the previously staged GlobalRange success
+stream remains readable via IF-RECV. Negative tests must therefore assert via
+`FORBID` on chainload/test-app markers, not on the absence of mock markers.
 
 Regenerate the embedded discovery array after a fixture change with
 `./gen-discovery-header.sh` (`build.sh` runs `--check` as a drift guard).
@@ -44,11 +56,12 @@ Regenerate the embedded discovery array after a fixture change with
 ```
 
 Clones a pinned upstream edk2 (`EDK2_TAG` at the top of `build.sh`, currently
-`edk2-stable202605`) into `~/.cache/tpba-edk2/` (override: `TPBA_EDK2_CACHE`),
-builds BaseTools once, and builds the driver from the standalone
-`MockOpalPkg.dsc` in this directory via `PACKAGES_PATH` — the edk2 tree is
-never patched, so bumping the tag is the whole upgrade. Needs `git`, `make`,
-gcc/g++, `nasm`, `iasl`, libuuid headers, `python3`.
+`edk2-stable202605`, verified against the pinned commit `EDK2_COMMIT` — tags
+are mutable, commits are not) into `~/.cache/tpba-edk2/` (override:
+`TPBA_EDK2_CACHE`), builds BaseTools once, and builds the driver from the
+standalone `MockOpalPkg.dsc` in this directory via `PACKAGES_PATH` — the edk2
+tree is never patched, so bumping the tag + commit pair is the whole upgrade.
+Needs `git`, `make`, gcc/g++, `nasm`, `iasl`, libuuid headers, `python3`.
 
 ## Loading in QEMU/OVMF
 
@@ -76,11 +89,11 @@ image must be signed with the test `db` key like the other test images.
 | `MOCKOPAL: protocol installed` | SSC protocol installed on a handle |
 | `MOCKOPAL: install failed` | protocol install failed (driver exits) |
 | `MOCKOPAL: fault <mode> active` | fault mode armed from the variable |
-| `MOCKOPAL: fault unknown (failing closed as auth-fail)` | unreadable/unknown variable value |
+| `MOCKOPAL: fault unknown failing closed as auth-fail` | unreadable/unknown variable value |
 | `MOCKOPAL: auth ok` / `MOCKOPAL: auth fail` | StartSession outcome |
 | `MOCKOPAL: unlocked` | global range read/write locks cleared |
-| `MOCKOPAL: mbr-done` | MBRControl Done set |
-| `MOCKOPAL: mbr-done refused (fault)` | `fail-mbrdone` fault hit |
+| `MOCKOPAL: mbr-done set` | MBRControl Done set |
+| `MOCKOPAL: mbr-refused fault` | `fail-mbrdone` fault hit |
 | `MOCKOPAL: session end` | EndOfSession processed |
 
 ## Fault injection (no rebuild)

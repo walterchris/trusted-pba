@@ -585,7 +585,7 @@ HandleSet (
 
   if (IsUid (&Toks[1], mUidMBRControl)) {
     if (mFault == MockFaultMbrDoneFail) {
-      SerialStr ("MOCKOPAL: mbr-done refused (fault)\r\n");
+      SerialStr ("MOCKOPAL: mbr-refused fault\r\n");
       ResultStream (B, STS_NOT_AUTHORIZED);
       return;
     }
@@ -596,7 +596,7 @@ HandleSet (
       {
         if (!mMbrDone) {
           mMbrDone = TRUE;
-          SerialStr ("MOCKOPAL: mbr-done\r\n");
+          SerialStr ("MOCKOPAL: mbr-done set\r\n");
         }
       }
     }
@@ -813,7 +813,7 @@ ReadFaultVariable (
     SerialStr ("MOCKOPAL: fault fail-after-unlock active\r\n");
   } else {
     mFault = MockFaultAuthFail;
-    SerialStr ("MOCKOPAL: fault unknown (failing closed as auth-fail)\r\n");
+    SerialStr ("MOCKOPAL: fault unknown failing closed as auth-fail\r\n");
   }
 }
 

@@ -1,6 +1,7 @@
 package opal
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"testing"
@@ -53,5 +54,10 @@ func TestDiscoveryGoldenFixture(t *testing.T) {
 	}
 	if *d != *want {
 		t.Fatalf("fixture changed:\n got %+v\nwant %+v", d, want)
+	}
+	// The simulator's builder must reproduce the fixture byte-for-byte: this is
+	// the same guarantee gen-discovery-header.sh --check enforces on the C side.
+	if got := buildDiscovery(want); !bytes.Equal(got, raw) {
+		t.Fatalf("buildDiscovery diverges from fixture:\n got % x\nwant % x", got, raw)
 	}
 }
