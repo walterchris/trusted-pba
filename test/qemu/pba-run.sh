@@ -27,15 +27,18 @@ trap cleanup EXIT
 
 [ -f "$SIGNED" ] || { echo "missing $SIGNED (run pba-setup.sh first)" >&2; exit 2; }
 
+# Both scenarios run the sed_unlock="none" pbatest policy: REQUIRE the loud
+# skip marker and FORBID both unlock outcomes, so a policy-variant mixup
+# (a build that actually drives an unlock) can never silently pass.
 echo "== pba-accept: fixture signed by embedded test CA must verify and chainload =="
-REQUIRE='TRUSTED-PBA: pba-verified,TEST-APP: ok,TRUSTED-PBA: chainload returned' \
-FORBID='TRUSTED-PBA: chainload failed' \
+REQUIRE='TRUSTED-PBA: sed unlock not required by policy,TRUSTED-PBA: pba-verified,TEST-APP: ok,TRUSTED-PBA: chainload returned' \
+FORBID='TRUSTED-PBA: chainload failed,TRUSTED-PBA: sed unlock ok,TRUSTED-PBA: sed unlock failed' \
 TESTAPP="$SIGNED" \
 	python3 "$HERE/expect-serial.py" "$PBA"
 
 echo "== pba-reject: unsigned fixture must fail closed (no chainload) =="
-REQUIRE='TRUSTED-PBA: chainload failed' \
-FORBID='TEST-APP: ok,TRUSTED-PBA: chainload returned' \
+REQUIRE='TRUSTED-PBA: sed unlock not required by policy,TRUSTED-PBA: chainload failed' \
+FORBID='TEST-APP: ok,TRUSTED-PBA: chainload returned,TRUSTED-PBA: sed unlock ok,TRUSTED-PBA: sed unlock failed' \
 TESTAPP="$FIX_UNSIGNED" \
 	python3 "$HERE/expect-serial.py" "$PBA"
 

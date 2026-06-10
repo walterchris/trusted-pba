@@ -74,6 +74,14 @@ and stage the driver via `run-qemu.sh`'s `DRIVER=` env (placed at
 ./smoke.sh ../../bin/testapp.efi   # dispatch smoke (build testapp via `task testapp`)
 ```
 
+**Competing instance note:** QEMU's IDE/SATA disks advertise IDENTIFY word 48
+(Trusted Computing supported), so OVMF's AtaBus installs a *real*
+`EFI_STORAGE_SECURITY_COMMAND_PROTOCOL` instance on the QEMU disk handle, which
+the PBA transport (first-instance only until Phase 8) may locate instead of
+this driver. PBA-unlock runs therefore attach the ESP as virtio-blk
+(`QEMU_DISK_IF=virtio` in `run-qemu.sh`), which carries no Storage Security —
+see `test/qemu/mock-opal-matrix.sh`.
+
 **Secure Boot note:** with enforcement active, BDS *silently* skips an
 unsigned/unrevoked-unknown `Driver####` image — no error anywhere. That is why
 the driver emits serial markers on COM1 (`0x3F8`, raw port I/O: the console is
