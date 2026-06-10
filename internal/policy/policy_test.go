@@ -2,6 +2,7 @@ package policy
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -96,6 +97,16 @@ func TestParseSEDUnlock(t *testing.T) {
 	}
 }
 
+// TestPINStringRedacts pins the structural never-log-PINs guard: formatting a
+// PIN must never yield the credential bytes.
+func TestPINStringRedacts(t *testing.T) {
+	for _, verb := range []string{"%v", "%s"} {
+		if got := fmt.Sprintf(verb, PIN("x")); got != "[redacted]" {
+			t.Errorf("Sprintf(%q, PIN) = %q, want %q", verb, got, "[redacted]")
+		}
+	}
+}
+
 func TestDefault(t *testing.T) {
 	if _, err := Default(); err != nil {
 		t.Fatalf("embedded default policy must parse: %v", err)
@@ -134,6 +145,7 @@ func TestCheckSecureBoot(t *testing.T) {
 // an error, never crash on attacker-controlled policy bytes).
 func FuzzParse(f *testing.F) {
 	f.Add([]byte(`{"entries":[{"name":"x","path":"a","validation":"firmware"}]}`))
+	f.Add([]byte(`{"sed_unlock":"required","sed_pin":"correct horse","entries":[{"name":"x","path":"a","validation":"pba"}]}`))
 	f.Add([]byte(`{`))
 	f.Add([]byte(``))
 	f.Fuzz(func(_ *testing.T, data []byte) {

@@ -101,8 +101,9 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
   (`TestUnlockSED*` assert backing-array zeroization on every path). MVP-only
   residual: the compiled-in policy embeds the PIN in the binary's policy JSON
   (extractable from the image) and the JSON decoder's intermediate string copy
-  is unscrubable — accepted because the compiled-in PIN is test-only and
-  replaced by real auth before production (ADR-0009). **Open scope:** when the
+  is unscrubable; `json.Decoder`'s internal read buffer likewise holds a heap
+  copy of the PIN-bearing JSON — accepted because the compiled-in PIN is
+  test-only and replaced by real auth before production (ADR-0009). **Open scope:** when the
   console PIN prompt lands, its input buffer must be zeroized (#51) — #51 item 1
   closed the library layer, this wiring the policy-holder layer.
 - **Tests:** `TestUnlockZeroizesSecrets`, `TestTransactZeroizesMethodPayload`,

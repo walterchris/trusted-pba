@@ -39,7 +39,7 @@ The ten core assets from baseline §10, with current location/status:
 | A4 | **Customer trust anchors** | Planned (external/provisioned anchors deferred; ADR-0007 scope boundary). |
 | A5 | **Secure Boot trust chain** (db/dbx) | Embedded Microsoft materials in `internal/truststore` (pinned, SHA-256-recorded). |
 | A6 | **Windows Boot Manager handoff** | `cmd/pba` chainload (`firmware`/`pba` validation modes). |
-| A7 | **Opal session state** | Modeled in `internal/opal` (Phase 4; byte-faithful sessions, in-memory IDs); PIN-bearing frames zeroized after the exchange (#51 item 1). **Driven over the real UEFI transport in the boot path** (Phase 6, ADR-0009); any unlock error — including a partial unlock — terminates via the on-error action, never proceeds or retries into boot (#51 item 2). |
+| A7 | **Opal session state** | Modeled in `internal/opal` (Phase 4; byte-faithful sessions, in-memory IDs); PIN-bearing frames zeroized after the exchange (#51 item 1). **Driven over the real UEFI transport in the boot path** (Phase 6, ADR-0009); any unlock error — including a partial unlock — terminates via the on-error action, never proceeds or retries into boot (#51 item 2). EndOfSession is best-effort, so the chainload can proceed with the authenticated Locking SP session still open on the TPer — pre-existing Phase 4 behavior, now live in the boot path; hardening candidate. |
 | A8 | **Update signing key** | Planned (release/update pipeline not yet built; ADR-0003 defers signing). |
 | A9 | **Release signing key** | Planned (no production signing yet; test keys only, ephemeral, never committed). |
 | A10 | **SBOM / provenance data** | CI skeleton (#9); trust-material provenance recorded in `internal/truststore/materials/PROVENANCE.md`. |
@@ -222,13 +222,15 @@ GOAL A: Boot an attacker-controlled image
 └─ A.3 Swap the target after verification (TOCTOU)   [mit: verified-buffer load,
                                               firmware never re-reads — R-012/#46]
 
-GOAL B: Obtain the SED unlock secret    [Phase 4 unlock LIBRARY done; boot wiring Phase 5/6]
+GOAL B: Obtain the SED unlock secret    [Phase 4 unlock library + Phase 6 boot wiring done;
+                                         hardware Phase 8]
 ├─ B.1 Read it from logs            [mit: never log secrets — opal-layer silence + PIN-free
 │                                         errors, fd-level: TestUnlockEmitsNoConsoleOutput]
 ├─ B.2 Capture Opal session state   [mit: in-memory session IDs; PIN buffers/frames zeroized
 │                                         on all paths: TestUnlockZeroizesSecrets,
 │                                         TestStartSessionGrowBudget; residual: firmware/DMA
-│                                         copies (§6.2); PIN-input buffer → #51 item 2]
+│                                         copies (§6.2); prompt-input scrub → future
+│                                         console PIN-prompt change (#51)]
 └─ B.3 Unlock before auth succeeds  [mit: fail closed — Set requires an auth'd session;
                                           wrong PIN/timeout/malformed keep drive Locked]
 ```

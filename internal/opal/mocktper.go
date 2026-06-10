@@ -42,7 +42,15 @@ const (
 	FaultTimeout
 	// FaultMalformed makes session Recv return undecodable bytes.
 	FaultMalformed
+	// FaultMBRDone makes only the MBRControl Set fail with a non-success method
+	// status: the session opens and the GlobalRange Set succeeds (the drive really
+	// unlocks), then setting MBRDone fails — the genuine partial-unlock state the
+	// boot wiring must treat as a hard error (#51 item 2).
+	FaultMBRDone
 )
+
+// statusFail is the TCG generic FAIL method status, returned by FaultMBRDone.
+const statusFail = 0x3f
 
 // ErrTimeout is returned by an injected transport timeout.
 var ErrTimeout = errors.New("opal: transport timeout")
@@ -183,6 +191,9 @@ func (m *MockTPer) setMethod(toks []token) []byte {
 			}
 		}
 	case uidMBRControl:
+		if m.fault == FaultMBRDone {
+			return resultStream(statusFail)
+		}
 		for _, c := range cols {
 			if c.num == colMBRDone && c.val == 1 {
 				m.mbrDone = true
