@@ -10,7 +10,12 @@ regardless of disk layout.
 Note: under enforcing Secure Boot, BDS *silently* skips an unsigned/unknown
 Driver#### image — the driver's serial marker is the only evidence it ran.
 
-  add-driver-entry.py <in-vars.fd> <out-vars.fd> <efi-path e.g. \\EFI\\MOCK\\MOCKOPALDXE.EFI>
+  add-driver-entry.py <in-vars.fd> <out-vars.fd> <efi-path e.g. \\EFI\\MOCK\\MOCKOPALDXE.EFI> [fault]
+
+If [fault] is given (auth-fail | fail-mbrdone | fail-after-unlock), the
+MockOpalFault variable (vendor GUID a8d866f2-64a0-11f1-a8dc-56433c165986,
+NV+BS+RT) is additionally set to that ASCII value so MockOpalDxe arms the
+corresponding fault at dispatch (see test/edk2-mock-opal/README.md).
 
 Requires the virt-firmware Python package.
 """
@@ -24,9 +29,12 @@ ATTR = (efivar.EFI_VARIABLE_NON_VOLATILE |
         efivar.EFI_VARIABLE_BOOTSERVICE_ACCESS |
         efivar.EFI_VARIABLE_RUNTIME_ACCESS)
 
-if len(sys.argv) != 4:
+MOCK_OPAL_FAULT_GUID = 'a8d866f2-64a0-11f1-a8dc-56433c165986'
+
+if len(sys.argv) not in (4, 5):
     sys.exit(__doc__)
 inp, outp, efipath = sys.argv[1], sys.argv[2], sys.argv[3]
+fault = sys.argv[4] if len(sys.argv) == 5 else None
 
 store = edk2.Edk2VarStore(inp)
 varlist = store.get_varlist()
@@ -42,5 +50,11 @@ order = efivar.EfiVar(ucs16.from_string('DriverOrder'), attr=ATTR,
                       data=struct.pack('<H', 0))
 varlist['DriverOrder'] = order
 
+if fault is not None:
+    varlist['MockOpalFault'] = efivar.EfiVar(ucs16.from_string('MockOpalFault'),
+                                             guid=MOCK_OPAL_FAULT_GUID,
+                                             attr=ATTR, data=fault.encode())
+
 store.write_varstore(outp, varlist)
-print(f'wrote {outp}: Driver0000 -> {efipath}, DriverOrder=[0000]')
+suffix = f', MockOpalFault={fault}' if fault is not None else ''
+print(f'wrote {outp}: Driver0000 -> {efipath}, DriverOrder=[0000]{suffix}')

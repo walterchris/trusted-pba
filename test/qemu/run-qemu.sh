@@ -16,6 +16,12 @@
 # If DRIVER=<path> is set, that image is staged at /EFI/MOCK/MOCKOPALDXE.EFI; it
 # is only dispatched if OVMF_VARS carries a matching Driver0000 entry (see
 # test/qemu/add-driver-entry.py and test/edk2-mock-opal/).
+# If QEMU_DISK_IF=virtio, the ESP is attached as a virtio-blk device instead of
+# the default IDE/SATA disk. QEMU's IDE/SATA disks advertise IDENTIFY word 48
+# (Trusted Computing supported), which makes OVMF's AtaBus install a competing
+# real EFI_STORAGE_SECURITY_COMMAND_PROTOCOL instance on the QEMU disk; the
+# mock-Opal matrix uses virtio so MockOpalDxe stays the sole instance the PBA
+# transport locates (multi-instance selection is a Phase 8 refinement).
 
 set -euo pipefail
 
@@ -69,6 +75,13 @@ chmod u+w "$VARS"
 QEMU_CPU="${QEMU_CPU:-max}"
 QEMU_MEM="${QEMU_MEM:-2G}"
 
+# ESP attachment (see header note on QEMU_DISK_IF).
+if [ "${QEMU_DISK_IF:-}" = "virtio" ]; then
+	DISK_ARGS=(-drive "format=raw,file=$IMG,if=none,id=esp" -device virtio-blk-pci,drive=esp)
+else
+	DISK_ARGS=(-drive "format=raw,file=$IMG")
+fi
+
 # Note: exec replaces this shell with QEMU so the caller's process-group kill
 # reaches QEMU directly. The temp dir is reclaimed by the OS on CI runners; the
 # orchestrator (expect-serial.py) owns teardown.
@@ -77,5 +90,5 @@ exec qemu-system-x86_64 \
 	-nographic \
 	-drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
 	-drive if=pflash,format=raw,unit=1,file="$VARS" \
-	-drive format=raw,file="$IMG" \
+	"${DISK_ARGS[@]}" \
 	-net none -no-reboot

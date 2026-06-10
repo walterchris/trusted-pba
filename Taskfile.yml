@@ -129,8 +129,8 @@ tasks:
     cmds:
       - task: build
       - >-
-        REQUIRE='TRUSTED-PBA: chainload failed'
-        FORBID='TRUSTED-PBA: chainload returned,TEST-APP: ok'
+        REQUIRE='TRUSTED-PBA: sed unlock not required by policy,TRUSTED-PBA: chainload failed'
+        FORBID='TRUSTED-PBA: chainload returned,TEST-APP: ok,TRUSTED-PBA: sed unlock ok,TRUSTED-PBA: sed unlock failed'
         python3 test/qemu/expect-serial.py {{.BIN}}/{{.APP}}.efi
 
   sb-matrix:
@@ -147,7 +147,7 @@ tasks:
         vars: { OUT: '{{.APP}}-policytest', EXTRA_TAGS: ",policytest" }
       - >-
         REQUIRE='policy requires Secure Boot enforcing'
-        FORBID='TEST-APP: ok,TRUSTED-PBA: chainload returned'
+        FORBID='TEST-APP: ok,TRUSTED-PBA: chainload returned,TRUSTED-PBA: sed unlock ok,TRUSTED-PBA: sed unlock failed'
         python3 test/qemu/expect-serial.py {{.BIN}}/{{.APP}}-policytest.efi
 
   pba-matrix:
@@ -158,6 +158,15 @@ tasks:
       - task: _efi
         vars: { OUT: '{{.APP}}-pbatest', EXTRA_TAGS: ",pbatest" }
       - test/qemu/pba-run.sh {{.BIN}}/{{.APP}}-pbatest.efi {{.BIN}}/testapp.efi
+
+  mock-opal-matrix:
+    desc: Mock-Opal integration matrix — unlock→MBRDone→chainload + fault negatives against MockOpalDxe in QEMU/OVMF (needs EDK2 build deps, sbsign, virt-firmware)
+    cmds:
+      - test/edk2-mock-opal/build.sh
+      - task: testapp
+      - task: _efi
+        vars: { OUT: '{{.APP}}-sedtest', EXTRA_TAGS: ",sedtest" }
+      - test/qemu/mock-opal-matrix.sh {{.BIN}}/{{.APP}}-sedtest.efi {{.BIN}}/testapp.efi
 
   test:
     desc: Run host Go tests

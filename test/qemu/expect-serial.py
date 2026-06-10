@@ -14,8 +14,11 @@ Env:
   QEMU_TIMEOUT  seconds (default 120)
   TESTAPP       path, forwarded to run-qemu.sh to stage the chainload target
   REQUIRE       comma-separated markers that must all appear
-                (default: the happy chainload path)
-  FORBID        comma-separated markers that must NOT appear (default: none)
+                (default: the happy chainload path with the loud SED-unlock
+                skip the default sed_unlock="none" policy must announce)
+  FORBID        comma-separated markers that must NOT appear (default: both
+                SED-unlock outcome markers — a "none" run must never unlock,
+                so a policy-variant mixup can never silently pass)
 """
 import os
 import re
@@ -27,7 +30,11 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUN = os.path.join(HERE, "run-qemu.sh")
 
-DEFAULT_REQUIRE = "TRUSTED-PBA: start,TEST-APP: ok,TRUSTED-PBA: chainload returned"
+DEFAULT_REQUIRE = (
+    "TRUSTED-PBA: start,TRUSTED-PBA: sed unlock not required by policy,"
+    "TEST-APP: ok,TRUSTED-PBA: chainload returned"
+)
+DEFAULT_FORBID = "TRUSTED-PBA: sed unlock ok,TRUSTED-PBA: sed unlock failed"
 TIMEOUT = float(os.environ.get("QEMU_TIMEOUT", "120"))
 
 
@@ -40,7 +47,7 @@ def _markers(env, default):
 
 
 REQUIRE = _markers("REQUIRE", DEFAULT_REQUIRE)
-FORBID = _markers("FORBID", "")
+FORBID = _markers("FORBID", DEFAULT_FORBID)
 
 
 class _HardTimeout(Exception):
