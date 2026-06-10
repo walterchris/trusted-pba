@@ -117,16 +117,20 @@ func chainload(e policy.BootEntry) error {
 // Boot trust store, then loads + starts the image only if it is trusted. Any
 // failure — read, trust-store load, or verification — fails closed.
 //
-// The image bytes are read once for verification; LoadImage re-reads the same path
-// to hand firmware its SourceBuffer. Pre-boot is single-threaded with no concurrent
-// process able to swap the file between the two reads, so that window is not a TOCTOU
-// risk here; under enforcing Secure Boot firmware also re-validates on load. Loading
-// from the already-verified buffer (needs a go-boot SourceBuffer entry point) is
-// tracked in #46 as defense-in-depth for the Secure-Boot-off case.
+// Invariant (verified buffer == executed buffer): the image bytes are read exactly
+// once into image, verified, and that same buffer is handed to the firmware via
+// LoadImageBuffer as the LoadImage SourceBuffer. The firmware never re-reads the
+// file, so there is no verify-then-load window even with Secure Boot off; under
+// enforcing Secure Boot the firmware additionally re-validates the buffer on load.
+// A single path string (target) feeds read, verification reporting, and the device
+// path passed to LoadImageBuffer.
 func verifyAndLoad(target string) error {
 	root, err := x64.UEFI.Root()
 	if err != nil {
 		return fmt.Errorf("chainload failed: open ESP: %w", err)
+	}
+	if root == nil {
+		return fmt.Errorf("chainload failed: open ESP: nil root volume")
 	}
 	fmt.Fprintf(out, "%s: ESP opened\r\n", banner)
 
@@ -144,8 +148,10 @@ func verifyAndLoad(target string) error {
 	}
 	fmt.Fprintf(out, "%s: pba-verified %s (trust set %s)\r\n", banner, target, truststore.TrustSet)
 
-	img, err := x64.UEFI.Boot.LoadImage(bootPolicy, root, target)
+	img, err := x64.UEFI.Boot.LoadImageBuffer(root, target, image)
 	if err != nil {
+		// Discard img unconditionally: firmware may return a valid handle
+		// alongside EFI_SECURITY_VIOLATION; it must never be started or kept.
 		return fmt.Errorf("chainload failed: load %q: %w", target, err)
 	}
 	fmt.Fprintf(out, "%s: starting %s\r\n", banner, target)
