@@ -37,7 +37,7 @@ secret).
 | R-009 | Opal/PE command parser accepts malformed response | A7/A6 | I/A | Medium | High | **Low** | Mitigated (parsers fuzzed, fail closed) |
 | R-010 | QEMU tests pass but real SED differs | — | I/A | High | High | **Medium** | Open — Phase 8 |
 | R-011 | Embedded trust anchors go stale (2011 CAs expire 2026-06-27) | A5 | I/A | High | High | **Medium** | Open — ADR-gated refresh |
-| R-012 | TOCTOU: target re-read after verification (SB-off) | A6 | I | Low | High | **Low** | Open — #46 |
+| R-012 | TOCTOU: target re-read after verification (SB-off) | A6 | I | Low | High | **Low** | Mitigated (verified-buffer load, #46) |
 | R-013 | Expired-but-valid signing key reused (expiry ignored) | A6 | I | Low | High | **Low** | Accepted — control is dbx; #48 |
 
 ## Detailed risks
@@ -142,7 +142,8 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 - **Threat/path:** malformed device/image input drives the parser into an unsafe
   state or panic.
 - **Mitigations:** PE/Authenticode + dbx parsing fail closed and never panic on
-  attacker input (`ErrParse`; `stripAuth2` bounds-checked); policy parser fuzzed.
+  attacker input (`ErrParse`; `stripAuth2` bounds-checked); policy parser fuzzed
+  (imageverify fuzz target: #56).
   Opal response parsing (token/packet/discovery/method) now fails closed and is
   fuzzed (`FuzzResponseParse`), satisfying baseline §12.
 - **Residual:** Low. **Tests:** `TestStripAuth2Rejects`, `FuzzParse`,
@@ -166,13 +167,22 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
   (CI-only, needs `TPBA_REAL_SHIM`). **Evidence:** ADR-0007; `PROVENANCE.md`.
 
 ### R-012 — TOCTOU: target re-read after verification
-- **Threat/path:** the PBA verifies the image bytes it read, but `LoadImage`
-  re-reads the path; a swap between the two reads could load unverified bytes.
-- **Mitigations:** pre-boot is single-threaded with no concurrent ESP writer
-  (assumption §5); under *enforcing* Secure Boot firmware revalidates on load. The
-  exposed case is Secure-Boot-off.
-- **Residual:** Low. **Status:** Open — fix is to load from the verified in-memory
-  buffer (#46). **Evidence:** `cmd/pba/main.go` `verifyAndLoad` comment.
+- **Threat/path:** the PBA verifies the image bytes it read; if `LoadImage`
+  re-read the path, a swap between the two reads could load unverified bytes.
+- **Mitigations:** `verifyAndLoad` loads via the fork's `LoadImageBuffer` from the
+  exact buffer `Verify` checked (LoadImage SourceBuffer) — the firmware never
+  re-reads the file, so verified bytes == executed bytes regardless of Secure Boot
+  state (#46). Defense-in-depth: pre-boot is single-threaded with no concurrent
+  ESP writer (assumption §5); under *enforcing* Secure Boot firmware revalidates
+  the buffer.
+- **Residual:** Low — physical/DMA modification of PBA memory between Verify and
+  LoadImage (out of scope per threat-model assumptions); firmware's own buffer
+  handling under SB-on (trusted, unchanged); `Verify` parser exposure tracked
+  under R-009/#56.
+- **Tests:** `TestVerifyAndLoadVerifiedBufferInvariant` (ordering + single-read +
+  reassignment ban, mutation-verified). **Evidence:** `cmd/pba/main.go`
+  `verifyAndLoad`; fork tag `v1.6.2-tpba.2` pinned in `go.sum`;
+  `evidence/security-review-records/2026-06-10-chainload-verified-buffer-46.md`.
 
 ### R-013 — Expired-but-valid signing key reused
 - **Threat/path:** the verifier ignores signing-cert validity (to match firmware
@@ -192,3 +202,4 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 | 2026-06-08 | Phase 4 (Opal unlock library + simulator, ADR-0004): R-009 → Low (Opal response parsers fuzzed + fail closed); R-002/R-003 High → Medium (unlock flow fail-closed by construction, no secret logged) — both still pending boot-path wiring (Phase 5/6) and hardware (Phase 8); R-008 now sets MBRDone in the unlock flow. |
 | 2026-06-08 | Phase 5 (UEFI Storage Security transport, ADR-0008): R-006 mitigations updated to cover the pinned first-party `walterchris/go-boot` fork (tag + go.sum, minimal additive patch). |
 | 2026-06-10 | #51 item 1 (Phase 5/6 gate from the Phase 4 security review): R-003 Medium → Low — all client-side PIN-bearing buffers zeroized on success and all failure paths, append-reallocation guarded by a tested 64-byte grow budget; fd-level log-scrub test proves opal-layer silence and PIN-free error text (raw/hex/base64/decimal-slice), mutation-verified. Remaining residuals recorded (firmware/DMA-side copies §6.2, compiler dead-store assumption, transient register copies); console PIN-input zeroization stays open for the Phase 6 wiring (#51 item 2). |
+| 2026-06-10 | R-012 Open → Mitigated (#46): `verifyAndLoad` chainloads from the verified in-memory buffer via the fork's `LoadImageBuffer` (pin bumped to `v1.6.2-tpba.2`), closing the SB-off verify-then-load TOCTOU; invariant test `TestVerifyAndLoadVerifiedBufferInvariant`; review record `evidence/security-review-records/2026-06-10-chainload-verified-buffer-46.md`. Imageverify fuzz follow-up noted under R-009 (#56). |
