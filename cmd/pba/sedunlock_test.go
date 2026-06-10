@@ -31,6 +31,7 @@ func mockConstructor(m *opal.MockTPer) (func() (opal.Transport, error), *int) {
 }
 
 func TestUnlockSEDNoneSkipsLoudly(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	pol := &policy.Policy{SEDUnlock: policy.SEDUnlockNone}
 
@@ -48,6 +49,7 @@ func TestUnlockSEDNoneSkipsLoudly(t *testing.T) {
 }
 
 func TestUnlockSEDRequiredHappyPath(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	m := opal.NewMockTPer([]byte(testPIN))
 	pol := requiredPolicy(testPIN)
@@ -70,6 +72,7 @@ func TestUnlockSEDRequiredHappyPath(t *testing.T) {
 }
 
 func TestUnlockSEDFailsClosedOnWrongPIN(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	m := opal.NewMockTPer([]byte(testPIN))
 	pol := requiredPolicy("wrong pin")
@@ -86,7 +89,7 @@ func TestUnlockSEDFailsClosedOnWrongPIN(t *testing.T) {
 	if strings.Contains(err.Error(), "wrong pin") || strings.Contains(buf.String(), "wrong pin") {
 		t.Errorf("PIN leaked into error/output")
 	}
-	if m.Locked() != true {
+	if !m.Locked() {
 		t.Error("drive must stay locked after failed auth")
 	}
 	if strings.Contains(buf.String(), "sed unlock ok") {
@@ -99,6 +102,7 @@ func TestUnlockSEDFailsClosedOnWrongPIN(t *testing.T) {
 }
 
 func TestUnlockSEDFailsClosedOnTransportFault(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	m := opal.NewMockTPer([]byte(testPIN))
 	m.Inject(opal.FaultTimeout)
@@ -115,11 +119,44 @@ func TestUnlockSEDFailsClosedOnTransportFault(t *testing.T) {
 	assertPINConsumed(t, pol, pinBacking)
 }
 
+// TestUnlockSEDFailsClosedOnPartialUnlock drives the genuine partial-unlock
+// state (#51 item 2): the session and the GlobalRange Set succeed — the drive
+// really unlocks — then the MBRDone Set fails. The wiring must surface a hard
+// error (the caller's on-error action then terminates the boot), never the
+// success marker, and the PIN must still be consumed.
+func TestUnlockSEDFailsClosedOnPartialUnlock(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	m := opal.NewMockTPer([]byte(testPIN))
+	m.Inject(opal.FaultMBRDone)
+	pol := requiredPolicy(testPIN)
+	pinBacking := []byte(pol.SEDPIN)
+
+	construct, _ := mockConstructor(m)
+	err := unlockSED(pol, construct, &buf)
+	if err == nil {
+		t.Fatal("unlockSED with failed MBRDone: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "sed unlock failed") {
+		t.Errorf("error %q must carry the 'sed unlock failed' stage marker", err)
+	}
+	// The mock must end in the real partial-unlock state: range unlocked, MBR
+	// not done. Anything else means the fault did not model a partial unlock.
+	if m.Locked() || m.MBRDone() {
+		t.Errorf("drive locked=%v mbrDone=%v, want the partial-unlock state (unlocked, MBRDone unset)", m.Locked(), m.MBRDone())
+	}
+	if strings.Contains(buf.String(), "sed unlock ok") {
+		t.Errorf("must not emit the success marker on partial unlock; output: %q", buf.String())
+	}
+	assertPINConsumed(t, pol, pinBacking)
+}
+
 // TestUnlockSEDFailsClosedWithoutCarrier exercises the real fail-closed
 // construction path: required + no Storage Security transport (the host stub,
 // standing in for "no SSC device found") must be a hard error — never a skip.
 // The PIN must be zeroized even though Unlock never ran.
 func TestUnlockSEDFailsClosedWithoutCarrier(t *testing.T) {
+	t.Parallel()
 	var buf bytes.Buffer
 	pol := requiredPolicy(testPIN)
 	pinBacking := []byte(pol.SEDPIN)

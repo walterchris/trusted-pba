@@ -1,6 +1,7 @@
 // SED unlock wiring (Phase 6, ADR-0009). This file has no build tags so the
 // decision logic is host-testable: the tamago entrypoint injects the real UEFI
 // Storage Security transport constructor, host tests inject mocks.
+
 package main
 
 import (

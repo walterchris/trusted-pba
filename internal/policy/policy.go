@@ -54,6 +54,12 @@ const (
 // replaced by real authentication before any production deployment (ADR-0009).
 type PIN []byte
 
+// String implements fmt.Stringer and always returns "[redacted]", enforcing the
+// non-negotiable "never log passwords, PINs, keys" rule (CLAUDE.md) structurally:
+// any future %v/%s of a PIN — or of a Policy containing one — cannot leak the
+// credential.
+func (PIN) String() string { return "[redacted]" }
+
 // UnmarshalJSON decodes a JSON string into the PIN bytes.
 func (p *PIN) UnmarshalJSON(data []byte) error {
 	var s string
