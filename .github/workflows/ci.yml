@@ -114,8 +114,8 @@ jobs:
       - name: QEMU/OVMF fail-closed test (no target staged → chainload must fail)
         shell: bash
         env:
-          REQUIRE: 'TRUSTED-PBA: chainload failed'
-          FORBID: 'TRUSTED-PBA: chainload returned,TEST-APP: ok'
+          REQUIRE: 'TRUSTED-PBA: sed unlock not required by policy,TRUSTED-PBA: chainload failed'
+          FORBID: 'TRUSTED-PBA: chainload returned,TEST-APP: ok,TRUSTED-PBA: sed unlock ok,TRUSTED-PBA: sed unlock failed'
         run: |
           set -o pipefail
           python3 test/qemu/expect-serial.py bin/trusted-pba.efi | tee -a qemu-serial.log
@@ -189,10 +189,48 @@ jobs:
       - name: Secure Boot matrix (SB off / enforcing-signed / enforcing-unsigned-rejected)
         run: task sb-matrix
 
+  # Phase 6 (#22, replaces the #9 placeholder): the MVP's primary virtual
+  # integration test — MockOpalDxe (EDK2 Storage Security mock) + the
+  # `-tags sedtest` PBA, full unlock→MBRDone→chainload matrix incl. fault
+  # negatives and a Secure-Boot-enforcing run (test/qemu/mock-opal-matrix.sh).
   mock-opal-integration:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
-      - name: mock Opal unlock + chainload (placeholder — #PHASE6)
+      - name: Install QEMU, OVMF, mtools, gnu-efi, sbsigntool, openssl/uuid + EDK2 build deps
         run: |
-          echo "TODO: MockOpalDxe -> PBA unlock -> chainload test app; fail closed on Opal failure"
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 ovmf mtools gnu-efi sbsigntool openssl uuid-runtime \
+            python3-pip build-essential nasm acpica-tools uuid-dev
+      - name: Install virt-firmware (virt-fw-vars)
+        run: pip install --user --break-system-packages 'virt-firmware==26.5.4'
+      - name: Install go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # Cache the pinned edk2 checkout + BaseTools + driver build intermediates.
+      # The key covers the EDK2_TAG/EDK2_COMMIT pin (in build.sh) and the driver
+      # sources, so a pin bump or source change rebuilds; restore-keys reuses the
+      # expensive edk2 clone + BaseTools build either way (build.sh verifies the
+      # cached checkout against the pinned commit before using it).
+      - name: Cache pinned EDK2 tree (BaseTools + driver build)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/tpba-edk2
+          key: tpba-edk2-${{ hashFiles('test/edk2-mock-opal/build.sh', 'test/edk2-mock-opal/MockOpalDxe.*', 'test/edk2-mock-opal/MockOpalPkg.*', 'test/edk2-mock-opal/Discovery0Locked.h') }}
+          restore-keys: |
+            tpba-edk2-
+      - name: Mock-Opal integration matrix (build driver + sedtest PBA + fixture, run all scenarios)
+        shell: bash
+        run: |
+          set -o pipefail
+          task mock-opal-matrix | tee mock-opal-serial.log
+      - name: Upload serial log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mock-opal-serial-log
+          path: mock-opal-serial.log
