@@ -130,6 +130,9 @@ func verifyAndLoad(target string) error {
 		return fmt.Errorf("chainload failed: open ESP: %w", err)
 	}
 	if root == nil {
+		// Dead code against the current pinned fork (Root() never returns a nil
+		// root with a nil error); kept against future fork changes, since both
+		// fs.ReadFile and LoadImageBuffer→root.FilePath dereference root.
 		return fmt.Errorf("chainload failed: open ESP: nil root volume")
 	}
 	fmt.Fprintf(out, "%s: ESP opened\r\n", banner)
