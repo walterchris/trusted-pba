@@ -46,6 +46,12 @@ EXPECT="$HERE/expect-serial.py"
 
 [ -f "$DRIVER" ] || { echo "MockOpalDxe.efi not found; run test/edk2-mock-opal/build.sh" >&2; exit 2; }
 
+# Re-prove the harness property every negative scenario depends on (FORBID
+# stays live after the last REQUIRE — a fail-open PBA can never false-PASS)
+# before trusting any verdict below. Cheap: no QEMU involved.
+echo "## harness self-test (expect-serial.py FORBID/grace semantics)"
+"$HERE/harness-selftest.sh"
+
 VFV="${VIRT_FW_VARS:-$HOME/.local/bin/virt-fw-vars}"
 command -v "$VFV" >/dev/null 2>&1 || VFV="virt-fw-vars"
 command -v "$VFV" >/dev/null 2>&1 || {

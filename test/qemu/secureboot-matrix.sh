@@ -65,16 +65,23 @@ scenario() {
 	if "$@"; then echo "----- ok"; else echo "----- FAILED"; fail=1; fi
 }
 
+# A and B run the default sed_unlock="none" PBA: REQUIRE the loud skip marker
+# and FORBID both unlock outcomes (same guard as the other suites), so a
+# policy-variant mixup — a build that actually drives an unlock — can never
+# silently pass.
+
 # A: Secure Boot off (Setup Mode) — unsigned PBA boots, reports "off".
 scenario "A: SB off, unsigned PBA -> boots" \
 	env OVMF_CODE="$OVMF_SECBOOT_CODE" OVMF_VARS="$OVMF_VARS_TEMPLATE" TESTAPP="$TESTAPP" \
-		REQUIRE='TRUSTED-PBA: secure-boot: off,TEST-APP: ok,TRUSTED-PBA: chainload returned' \
+		REQUIRE='TRUSTED-PBA: secure-boot: off,TRUSTED-PBA: sed unlock not required by policy,TEST-APP: ok,TRUSTED-PBA: chainload returned' \
+		FORBID='TRUSTED-PBA: sed unlock ok,TRUSTED-PBA: sed unlock failed' \
 		python3 "$EXPECT" "$PBA"
 
 # B: Secure Boot enforcing — signed PBA boots, reports "enforcing", chainloads signed fixture.
 scenario "B: SB enforcing, signed PBA -> boots" \
 	env OVMF_CODE="$OVMF_SECBOOT_CODE" OVMF_VARS="$WORK/vars.secboot.fd" TESTAPP="$WORK/testapp.signed.efi" \
-		REQUIRE='TRUSTED-PBA: secure-boot: enforcing,TEST-APP: ok,TRUSTED-PBA: chainload returned' \
+		REQUIRE='TRUSTED-PBA: secure-boot: enforcing,TRUSTED-PBA: sed unlock not required by policy,TEST-APP: ok,TRUSTED-PBA: chainload returned' \
+		FORBID='TRUSTED-PBA: sed unlock ok,TRUSTED-PBA: sed unlock failed' \
 		python3 "$EXPECT" "$WORK/pba.signed.efi"
 
 # C: Secure Boot enforcing — UNSIGNED PBA is rejected by firmware (fail closed).
