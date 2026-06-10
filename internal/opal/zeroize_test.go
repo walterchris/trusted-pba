@@ -2,6 +2,7 @@ package opal
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -85,6 +86,49 @@ func TestUnlockZeroizesSecrets(t *testing.T) {
 			t.Errorf("pin not zeroized after early failure: %x", pin)
 		}
 	})
+
+	t.Run("malformed response after the PIN was transmitted", func(t *testing.T) {
+		pin := []byte("super secret")
+		dev := NewMockTPer([]byte("super secret"))
+		dev.Inject(FaultMalformed) // Send (carrying the PIN) succeeds; the session Recv fails to decode
+		spy := &spyTransport{MockTPer: dev, secret: []byte("super secret")}
+		if err := NewClient(spy).Unlock(AuthorityAdmin1, pin); err == nil {
+			t.Fatal("expected decode failure")
+		}
+		assertZeroized(t, spy, pin)
+	})
+
+	t.Run("transport failure mid-session after successful auth", func(t *testing.T) {
+		pin := []byte("super secret")
+		dev := NewMockTPer([]byte("super secret"))
+		spy := &spyTransport{MockTPer: dev, secret: []byte("super secret")}
+		if err := NewClient(&failAfterAuthTransport{spyTransport: spy, dev: dev}).Unlock(AuthorityAdmin1, pin); !errors.Is(err, ErrTimeout) {
+			t.Fatalf("want ErrTimeout mid-session, got %v", err)
+		}
+		// Two sends prove the failure hit the in-session command, not StartSession.
+		if len(spy.frames) < 2 {
+			t.Fatalf("only %d frame(s) sent — the fault fired before auth completed", len(spy.frames))
+		}
+		assertZeroized(t, spy, pin)
+	})
+}
+
+// failAfterAuthTransport lets the StartSession exchange (the frame carrying the
+// PIN) succeed, then injects a timeout so the first in-session command fails:
+// PIN-bearing buffers must be zeroized even when the session dies after a
+// successful authentication.
+type failAfterAuthTransport struct {
+	*spyTransport
+	dev   *MockTPer
+	sends int
+}
+
+func (f *failAfterAuthTransport) Send(proto uint8, comID uint16, data []byte) error {
+	f.sends++
+	if f.sends == 2 { // send 1: StartSession (succeeds); send 2: Set on the locking range
+		f.dev.Inject(FaultTimeout)
+	}
+	return f.spyTransport.Send(proto, comID, data)
 }
 
 func TestTransactZeroizesMethodPayload(t *testing.T) {
