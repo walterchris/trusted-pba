@@ -5,9 +5,12 @@ Living risk assessment per the
 with the [threat model](../security/threat-model.md) (adversaries, trust
 boundaries, attack trees); this document quantifies and tracks each risk.
 
-- **Status:** through **Phase 3**. Risks whose mitigations are not yet built
-  (update pipeline, anti-rollback, signing/key management, Opal unlock) are listed
-  with their current (unmitigated/partial) standing and a *planned* mitigation.
+- **Status:** through **Phase 6** (Opal unlock wired into the boot path over the
+  UEFI Storage Security transport and exercised end-to-end by the QEMU
+  MockOpalDxe matrix — ADR-0004/0008/0009). Risks whose mitigations are not yet
+  built (update pipeline, anti-rollback, signing/key management, hardware
+  validation) are listed with their current (unmitigated/partial) standing and a
+  *planned* mitigation.
 - **Owner:** Security Owner, unless a row names another.
 - **Review cadence (baseline §9):** before MVP, before first hardware test, before
   first customer delivery, before every release, after every critical
@@ -33,7 +36,7 @@ secret).
 | R-005 | Rollback to a vulnerable PBA version | A2/A5 | I | Medium | Critical | **High** | Open — anti-rollback not built |
 | R-006 | Malicious update accepted | A8/A2/A5 | I | Medium | Critical | **High** | Open — update/signing not built |
 | R-007 | Windows Boot Manager chainload fails after unlock | A6 | A | Medium | High | **Medium** | Partial — virtual only |
-| R-008 | MBRDone does not take effect until reboot | A7 | A/I | Medium | High | **Medium** | Open — Phase 6/8 |
+| R-008 | MBRDone does not take effect until reboot | A7 | A/I | Medium | High | **Medium** | Partial — virtual e2e (Phase 6 mock matrix); hardware timing Phase 8 |
 | R-009 | Opal/PE command parser accepts malformed response | A7/A6 | I/A | Medium | High | **Low** | Mitigated (parsers fuzzed, fail closed) |
 | R-010 | QEMU tests pass but real SED differs | — | I/A | High | High | **Medium** | Open — Phase 8 |
 | R-011 | Embedded trust anchors go stale (2011 CAs expire 2026-06-27) | A5 | I/A | High | High | **Medium** | Open — ADR-gated refresh |
@@ -173,10 +176,14 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 ### R-008 — MBRDone does not take effect until reboot
 - **Threat/path:** Shadow-MBR remains visible after unlock, OS reads wrong data.
 - **Mitigations:** Phase 4 sets `MBRControl.Done` as part of the unlock flow (the
-  mock reflects it in discovery); real MBRDone timing/visibility needs hardware
-  validation (Phase 6/8).
+  mock reflects it in discovery); the Phase 6 QEMU MockOpalDxe matrix exercises
+  MBRDone end-to-end against the EDK2 mock (#22) — `unlock-chainload` covers the
+  full unlock + MBRDone + chainload path, and `fail-mbrdone` proves a failed
+  MBRDone never reaches chainload (FORBID on chainload markers,
+  mutation-proven). Real MBRDone timing/visibility on actual drives (in-session
+  MBRDone) still needs hardware validation (Phase 8).
 - **Residual:** Medium. **Tests:** `TestUnlockHappyPath` (asserts MBRDone set);
-  hardware planned.
+  `mock-opal-matrix` `unlock-chainload` + `fail-mbrdone`; hardware planned.
 
 ### R-009 — Opal/PE command parser accepts malformed response
 - **Threat/path:** malformed device/image input drives the parser into an unsafe
@@ -247,3 +254,4 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 | 2026-06-10 | Phase 6 boot-path wiring (#22, #51 item 2, ADR-0009): R-002 mitigation extends from library to boot path — policy-gated `sed_unlock` (absence = required, explicit loud `none`), hard failure on missing Storage Security device, partial-unlock/any error → on-error action with no retry/fallback; residual stays Medium pending QEMU MockOpalDxe e2e + hardware. R-003: wiring holds no PIN copy (policy holder cleared, every path tested); MVP compiled-in-PIN residual recorded (binary-embedded JSON + decoder string copy, test-only credential, replaced before production). |
 | 2026-06-10 | go-boot fork `v1.6.2-tpba.3` (#22, ADR-0008 Amendment 2026-06-10): R-006 mitigation wording corrected — the fork patch set is no longer "minimal additive": it carries one functional upstream-file edit (the `callFn` stack-alignment fix in `uefi/uefi.s`, latent upstream ABI bug, to be submitted upstream) alongside the additive files; SSC slot-dispatch fix + fail-closed NULL-slot check in the additive `storagesecurity.go`. R-012 evidence pin reference updated to the current tag. Review record: `evidence/security-review-records/2026-06-10-go-boot-tpba3-abi-fixes.md`. |
 | 2026-06-10 | Phase 6 QEMU MockOpalDxe integration matrix (#22): R-002 QEMU e2e in place — six-scenario matrix (positive unlock-chainload/secure-boot tied to driver markers; negative auth-fail/fail-mbrdone/fail-after-unlock/no-driver with mutation-proven FORBIDs), real `mock-opal-integration` CI job, release-policy gate; residual stays Medium but narrows to hardware-pending (Phase 8) — local 6/6 + mutation proof in evidence, green CI run on the PR completes the runs-in-CI claim. Harness false-PASS (FORBID dead after final REQUIRE) found, fixed, self-tested. R-006/TB5 accepted sub-residual recorded: EDK2 cache verification is ref-level only. Review record: `evidence/security-review-records/2026-06-10-mock-opal-integration-matrix-22.md`. |
+| 2026-06-10 | Phase 6 wrap-up (#60 merged; epics #22/#19 closed): staleness refresh only. Status header updated from "through Phase 3" to coverage through Phase 6 (Opal unlock no longer in the "not yet built" list). R-008 updated: MBRDone is now exercised end-to-end against the EDK2 mock (`unlock-chainload` + `fail-mbrdone`, #22); status Open → Partial, residual stays Medium — real-drive in-session MBRDone timing remains the Phase 8 item. ADR-0009 Proposed → Accepted (§5.3/§23 human gate satisfied by the Release Owner merging #59). No rating changes. |

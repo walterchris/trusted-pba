@@ -1,8 +1,8 @@
 # ADR-0009: Policy-gated SED unlock in the boot path
 
 ## Status
-Proposed — §5.3/§23 human gate is the Release Owner merging the Phase 6
-boot-wiring PR. Authored in Phase 6 (#22, #51 item 2).
+Accepted — §5.3/§23 human gate satisfied by the Release Owner merging the
+Phase 6 wiring PR (#59). Authored in Phase 6 (#22, #51 item 2).
 
 ## Context
 Phases 4/5 delivered the fail-closed Opal unlock library (`internal/opal`, with
