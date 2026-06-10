@@ -3,10 +3,11 @@ package opal
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"fmt"
 	"io"
-	"log"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -20,48 +21,86 @@ import (
 // text that can reach it is the error value Unlock returns, which main prints.
 // So these tests assert both halves:
 //
-//  1. a full Unlock exchange writes nothing to os.Stdout, os.Stderr, or the
-//     default log output (the capture must be empty — silence subsumes
-//     scrubbing at this layer), and
+//  1. a full Unlock exchange writes nothing to file descriptors 1 and 2 (the
+//     capture must be empty — silence subsumes scrubbing at this layer), and
 //  2. the returned error text never contains the PIN in any representation
-//     (raw, hex, base64) — that error string is what actually gets printed.
+//     (raw, hex, base64, decimal byte slice) — that error string is what
+//     actually gets printed.
 
 // markerPIN is distinctive enough that a leak into output or error text cannot
 // be an accidental substring collision.
-var markerPIN = []byte("MARKER-PIN-3fa9c1d7e5")
+const markerPIN = "MARKER-PIN-3fa9c1d7e5"
 
-// captureProcessOutput runs fn with os.Stdout, os.Stderr, and the default log
-// writer redirected to an in-process pipe and returns everything written. The
-// log package captures os.Stderr at init, so swapping the variables alone would
-// miss it; log.SetOutput covers that path too.
+// captureProcessOutput runs fn with file descriptors 1 and 2 redirected to an
+// in-process pipe and returns everything written. The redirection must happen
+// at the descriptor level: swapping the os.Stdout/os.Stderr variables would
+// miss writers that hold the real descriptors — notably the runtime's builtin
+// print/println, which write straight to fds 1/2. dup'ing the pipe over the
+// fds catches every write path, including the log package's init-captured
+// os.Stderr. Host-(Linux-)only; the opal tests never run under TamaGo.
 func captureProcessOutput(t *testing.T, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("pipe: %v", err)
 	}
-	oldOut, oldErr := os.Stdout, os.Stderr
-	os.Stdout, os.Stderr = w, w
-	log.SetOutput(w)
-	defer func() {
-		os.Stdout, os.Stderr = oldOut, oldErr
-		log.SetOutput(os.Stderr)
+	defer func() { _ = r.Close() }()
+
+	savedOut, err := syscall.Dup(syscall.Stdout)
+	if err != nil {
+		t.Fatalf("dup stdout: %v", err)
+	}
+	savedErr, err := syscall.Dup(syscall.Stderr)
+	if err != nil {
+		_ = syscall.Close(savedOut)
+		t.Fatalf("dup stderr: %v", err)
+	}
+
+	restored := false
+	restore := func() {
+		if restored {
+			return
+		}
+		restored = true
+		// Best effort: a failure to restore the real fds cannot be reported
+		// anywhere useful, and the saved descriptors are always valid here.
+		_ = syscall.Dup3(savedOut, syscall.Stdout, 0)
+		_ = syscall.Dup3(savedErr, syscall.Stderr, 0)
+		_ = syscall.Close(savedOut)
+		_ = syscall.Close(savedErr)
+		_ = w.Close() // the reader sees EOF once fds 1/2 no longer alias the pipe
+	}
+	defer restore() // also runs when fn itself fails the test (t.Fatalf → Goexit)
+
+	if err := syscall.Dup3(int(w.Fd()), syscall.Stdout, 0); err != nil {
+		t.Fatalf("redirect stdout: %v", err)
+	}
+	if err := syscall.Dup3(int(w.Fd()), syscall.Stderr, 0); err != nil {
+		t.Fatalf("redirect stderr: %v", err)
+	}
+
+	type capture struct {
+		out     string
+		readErr error
+	}
+	done := make(chan capture, 1) // buffered: the goroutine never blocks, even if the test bails out
+	go func() {
+		b, err := io.ReadAll(r)
+		done <- capture{string(b), err}
 	}()
 
-	captured := make(chan string)
-	go func() {
-		b, _ := io.ReadAll(r)
-		captured <- string(b)
-	}()
 	fn()
-	if err := w.Close(); err != nil {
-		t.Fatalf("close pipe: %v", err)
+	restore()
+	c := <-done
+	if c.readErr != nil {
+		t.Fatalf("read captured output: %v", c.readErr)
 	}
-	return <-captured
+	return c.out
 }
 
 // secretEncodings returns the representations under which the PIN must never
-// appear in output: raw bytes, lower/upper hex, and the base64 variants.
+// appear in output: raw bytes, lower/upper hex, the base64 variants, and Go's
+// default byte-slice formatting ("[77 65 ...]", what %v/%d/fmt.Sprint print).
 func secretEncodings(pin []byte) map[string]string {
 	h := hex.EncodeToString(pin)
 	return map[string]string{
@@ -71,6 +110,7 @@ func secretEncodings(pin []byte) map[string]string {
 		"base64":        base64.StdEncoding.EncodeToString(pin),
 		"base64url":     base64.URLEncoding.EncodeToString(pin),
 		"base64 no pad": base64.RawStdEncoding.EncodeToString(pin),
+		"decimal slice": fmt.Sprintf("%d", pin),
 	}
 }
 
@@ -94,7 +134,7 @@ func TestUnlockEmitsNoConsoleOutput(t *testing.T) {
 	}{
 		{
 			name:   "successful auth",
-			device: func() Transport { return NewMockTPer(markerPIN) },
+			device: func() Transport { return NewMockTPer([]byte(markerPIN)) },
 		},
 		{
 			name:    "wrong pin",
@@ -104,7 +144,7 @@ func TestUnlockEmitsNoConsoleOutput(t *testing.T) {
 		{
 			name: "transport timeout",
 			device: func() Transport {
-				dev := NewMockTPer(markerPIN)
+				dev := NewMockTPer([]byte(markerPIN))
 				dev.Inject(FaultTimeout)
 				return dev
 			},
@@ -113,7 +153,7 @@ func TestUnlockEmitsNoConsoleOutput(t *testing.T) {
 		{
 			name: "malformed response after the PIN was transmitted",
 			device: func() Transport {
-				dev := NewMockTPer(markerPIN)
+				dev := NewMockTPer([]byte(markerPIN))
 				dev.Inject(FaultMalformed) // discovery works; the session Recv fails
 				return dev
 			},
@@ -125,7 +165,7 @@ func TestUnlockEmitsNoConsoleOutput(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var err error
 			out := captureProcessOutput(t, func() {
-				pin := append([]byte(nil), markerPIN...) // Unlock consumes pin
+				pin := []byte(markerPIN) // fresh copy: Unlock consumes pin
 				err = NewClient(tc.device()).Unlock(AuthorityAdmin1, pin)
 			})
 
@@ -141,11 +181,11 @@ func TestUnlockEmitsNoConsoleOutput(t *testing.T) {
 			if out != "" {
 				t.Errorf("opal layer wrote %d bytes to process output; it must be silent", len(out))
 			}
-			assertScrubbed(t, "process output", out, markerPIN)
+			assertScrubbed(t, "process output", out, []byte(markerPIN))
 
 			// The error is what cmd/pba prints to console/serial — scrub it.
 			if err != nil {
-				assertScrubbed(t, "error text", err.Error(), markerPIN)
+				assertScrubbed(t, "error text", err.Error(), []byte(markerPIN))
 			}
 		})
 	}
