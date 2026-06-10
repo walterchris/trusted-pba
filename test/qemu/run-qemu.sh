@@ -13,6 +13,9 @@
 # OVMF firmware paths can be overridden via OVMF_CODE / OVMF_VARS.
 # If TESTAPP=<path> is set, that image is staged at /EFI/TEST/TESTAPP.EFI so the
 # booted app can chainload it.
+# If DRIVER=<path> is set, that image is staged at /EFI/MOCK/MOCKOPALDXE.EFI; it
+# is only dispatched if OVMF_VARS carries a matching Driver0000 entry (see
+# test/qemu/add-driver-entry.py and test/edk2-mock-opal/).
 
 set -euo pipefail
 
@@ -45,6 +48,12 @@ mcopy -i "$IMG" "$APP" ::/EFI/BOOT/BOOTX64.EFI
 if [ -n "${TESTAPP:-}" ]; then
 	mmd -i "$IMG" ::/EFI/TEST
 	mcopy -i "$IMG" "$TESTAPP" ::/EFI/TEST/TESTAPP.EFI
+fi
+
+# Optional DXE driver (Phase 6: MockOpalDxe), loaded via Driver0000 in OVMF_VARS.
+if [ -n "${DRIVER:-}" ]; then
+	mmd -i "$IMG" ::/EFI/MOCK
+	mcopy -i "$IMG" "$DRIVER" ::/EFI/MOCK/MOCKOPALDXE.EFI
 fi
 
 # Per-run writable copy of the NVRAM variable store.

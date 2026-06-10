@@ -1,0 +1,11 @@
+## @file
+#  MockOpalPkg — package declaration for the MockOpalDxe test-tooling driver.
+#  Exists only so the directory is a valid EDK2 package for the standalone
+#  DSC build (build.sh); declares nothing of its own.
+##
+
+[Defines]
+  DEC_SPECIFICATION = 0x00010005
+  PACKAGE_NAME      = MockOpalPkg
+  PACKAGE_GUID      = a8d80702-64a0-11f1-aee0-56433c165986
+  PACKAGE_VERSION   = 0.1

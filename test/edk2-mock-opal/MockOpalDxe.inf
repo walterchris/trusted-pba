@@ -1,0 +1,30 @@
+## @file
+#  MockOpalDxe — test-tooling DXE driver emulating the canonical locked Opal
+#  SED via EFI_STORAGE_SECURITY_COMMAND_PROTOCOL (test-tooling-plan §3.3).
+#  NOT product code.
+##
+
+[Defines]
+  INF_VERSION    = 0x00010005
+  BASE_NAME      = MockOpalDxe
+  FILE_GUID      = a8d7cf4e-64a0-11f1-ad17-56433c165986
+  MODULE_TYPE    = UEFI_DRIVER
+  VERSION_STRING = 0.1
+  ENTRY_POINT    = MockOpalDxeEntryPoint
+
+[Sources]
+  MockOpalDxe.c
+  Discovery0Locked.h
+
+[Packages]
+  MdePkg/MdePkg.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  UefiRuntimeServicesTableLib
+  BaseMemoryLib
+  IoLib
+
+[Protocols]
+  gEfiStorageSecurityCommandProtocolGuid  ## PRODUCES
