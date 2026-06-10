@@ -27,7 +27,7 @@ secret).
 | ID | Risk | Asset | C/I/A | Likelihood | Severity | Residual | Status |
 |---|---|---|---|---|---|---|---|
 | R-001 | PBA accepts an untrusted EFI image | A6/A5 | I | Medium | Critical | **Low** | Mitigated (imageverify) |
-| R-002 | PBA unlocks SED before authentication succeeds | A1/A7 | C/I | Medium | Critical | **Medium** | Library fail-closed; wiring Phase 5/6 |
+| R-002 | PBA unlocks SED before authentication succeeds | A1/A7 | C/I | Medium | Critical | **Medium** | Library fail-closed; boot-path gate wired (ADR-0009); QEMU e2e + hardware pending |
 | R-003 | Unlock secret leaks through logs | A1 | C | Medium | Critical | **Low** | Mitigated in library (zeroize + log-scrub tested); PIN-entry wiring #51 |
 | R-004 | Attacker modifies PBA policy file | A3 | I | Low | High | **Low** | Mitigated (compiled-in, fail-closed) |
 | R-005 | Rollback to a vulnerable PBA version | A2/A5 | I | Medium | Critical | **High** | Open — anti-rollback not built |
@@ -60,11 +60,17 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 - **Mitigations:** Phase 4 `internal/opal` unlock flow is fail-closed by
   construction — `Set` (range unlock / MBRDone) requires an authenticated session,
   and wrong PIN / non-success status / transport error abort before any unlock, so
-  the drive stays locked (verified by the negative-test matrix). **Not yet wired
-  into the boot path** (Phase 5/6) and not yet validated on hardware (Phase 8).
-- **Residual:** Medium — library is fail-closed; end-to-end wiring + hardware
-  pending. **Tests:** `TestUnlockHappyPath`, `TestUnlockFailsClosed/*`.
-  **Evidence:** ADR-0004. **Owner:** Security Owner.
+  the drive stays locked (verified by the negative-test matrix). **Wired into the
+  boot path** (Phase 6, ADR-0009): the `sed_unlock` policy gate defaults to
+  `required` on absence, a missing Storage Security device under `required` is a
+  hard failure, and any unlock error — including a partial unlock — terminates
+  via the on-error action with no retry and no fallback to chainload (#51 item 2).
+  Skipping the unlock needs an explicit, loudly-logged `"sed_unlock": "none"`.
+- **Residual:** Medium — wiring host-tested against the native simulator; QEMU
+  MockOpalDxe end-to-end (next Phase 6 ticket) + hardware (Phase 8) pending.
+  **Tests:** `TestUnlockHappyPath`, `TestUnlockFailsClosed/*`;
+  `cmd/pba` `TestUnlockSED*`; `internal/policy` `TestParseSEDUnlock`.
+  **Evidence:** ADR-0004, ADR-0009. **Owner:** Security Owner.
 
 ### R-003 — Unlock secret leaks through logs
 - **Threat/path:** secret/PIN/session data written to console/serial.
@@ -88,9 +94,17 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
   evil-maid residual, threat model §6.2); zeroization relies on the Go compiler
   not dead-store-eliminating `clear()` (true with the current toolchain, not a
   language guarantee); transient register/temporary copies are unscrubbed;
-  swap/crash-dump exposure does not apply pre-boot under TamaGo. **Open scope:**
-  the Phase 6 boot-path wiring must zeroize the console PIN-*input* buffer (#51
-  item 2) — #51 item 1 closes the library layer only.
+  swap/crash-dump exposure does not apply pre-boot under TamaGo. The Phase 6
+  boot-path wiring (ADR-0009) holds no PIN copy of its own: the policy's PIN is
+  moved out and handed to `Unlock` exactly once (which zeroizes it), with a
+  belt-and-braces clear on the transport-construction failure path
+  (`TestUnlockSED*` assert backing-array zeroization on every path). MVP-only
+  residual: the compiled-in policy embeds the PIN in the binary's policy JSON
+  (extractable from the image) and the JSON decoder's intermediate string copy
+  is unscrubable — accepted because the compiled-in PIN is test-only and
+  replaced by real auth before production (ADR-0009). **Open scope:** when the
+  console PIN prompt lands, its input buffer must be zeroized (#51) — #51 item 1
+  closed the library layer, this wiring the policy-holder layer.
 - **Tests:** `TestUnlockZeroizesSecrets`, `TestTransactZeroizesMethodPayload`,
   `TestStartSessionGrowBudget`, `TestBuilderGrowPreventsReallocation`,
   `TestUnlockEmitsNoConsoleOutput`. **Evidence:** ADR-0004; #51 item 1
@@ -203,3 +217,4 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 | 2026-06-08 | Phase 5 (UEFI Storage Security transport, ADR-0008): R-006 mitigations updated to cover the pinned first-party `walterchris/go-boot` fork (tag + go.sum, minimal additive patch). |
 | 2026-06-10 | #51 item 1 (Phase 5/6 gate from the Phase 4 security review): R-003 Medium → Low — all client-side PIN-bearing buffers zeroized on success and all failure paths, append-reallocation guarded by a tested 64-byte grow budget; fd-level log-scrub test proves opal-layer silence and PIN-free error text (raw/hex/base64/decimal-slice), mutation-verified. Remaining residuals recorded (firmware/DMA-side copies §6.2, compiler dead-store assumption, transient register copies); console PIN-input zeroization stays open for the Phase 6 wiring (#51 item 2). |
 | 2026-06-10 | R-012 Open → Mitigated (#46): `verifyAndLoad` chainloads from the verified in-memory buffer via the fork's `LoadImageBuffer` (pin bumped to `v1.6.2-tpba.2`), closing the SB-off verify-then-load TOCTOU; invariant test `TestVerifyAndLoadVerifiedBufferInvariant`; review record `evidence/security-review-records/2026-06-10-chainload-verified-buffer-46.md`. Imageverify fuzz follow-up noted under R-009 (#56). |
+| 2026-06-10 | Phase 6 boot-path wiring (#22, #51 item 2, ADR-0009): R-002 mitigation extends from library to boot path — policy-gated `sed_unlock` (absence = required, explicit loud `none`), hard failure on missing Storage Security device, partial-unlock/any error → on-error action with no retry/fallback; residual stays Medium pending QEMU MockOpalDxe e2e + hardware. R-003: wiring holds no PIN copy (policy holder cleared, every path tested); MVP compiled-in-PIN residual recorded (binary-embedded JSON + decoder string copy, test-only credential, replaced before production). |
