@@ -56,7 +56,8 @@ failure = on-error action (never chainload, never retry); a missing device under
 `required` is a hard failure. Residual (accepted for MVP, documented in the risk
 assessment): the compiled-in PIN is embedded in the policy JSON inside the
 binary — it is extractable from the image and transient unscrubable copies exist
-in the embedded JSON bytes and the JSON decoder's intermediate string. This is
+in the embedded JSON bytes, the JSON decoder's intermediate string, and the
+`json.Decoder`'s internal read buffer. This is
 exactly why the compiled-in PIN is test-only and replaced before production.
 R-002 mitigation moves from "library only" to "wired, virtual-tested"; hardware
 validation remains Phase 8.
