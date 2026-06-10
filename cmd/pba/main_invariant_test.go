@@ -13,10 +13,15 @@ import (
 // verified-buffer contract on the tamago-only main.go (which a host test cannot
 // import, so it is checked at the AST level): inside verifyAndLoad, a single
 // path identifier — the function's sole parameter — must feed the file read and
-// the firmware device path, the exact buffer returned by that read must be the
-// one verified and handed to LoadImageBuffer, and no LoadImage call (which
-// would re-read the file and reopen the verify-then-load window) may remain.
+// the firmware device path; the image must be read exactly once via fs.ReadFile,
+// in source order strictly before Verify, which is strictly before
+// LoadImageBuffer; the exact buffer returned by that read must be the one
+// verified and handed to LoadImageBuffer, never reassigned after the read; and
+// no LoadImage call (which would re-read the file and reopen the
+// verify-then-load window) may remain.
 func TestVerifyAndLoadVerifiedBufferInvariant(t *testing.T) {
+	t.Parallel()
+
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "main.go", nil, 0)
 	if err != nil {
@@ -41,8 +46,13 @@ func TestVerifyAndLoadVerifiedBufferInvariant(t *testing.T) {
 	path := params[0].Names[0].Name
 
 	var (
-		readPath, readBuf string // <readBuf>, err := fs.ReadFile(root, <readPath>)
+		readFileCalls     int             // every ReadFile call, assignment or not
+		readAssign        *ast.AssignStmt // <readBuf>, err := fs.ReadFile(root, <readPath>)
+		readPos           token.Pos
+		readPath, readBuf string
+		verifyPos         token.Pos
 		verifyBuf         string // store.Verifier().Verify(<verifyBuf>)
+		loadPos           token.Pos
 		loadPath, loadBuf string // LoadImageBuffer(root, <loadPath>, <loadBuf>)
 		sawLoadImage      bool
 	)
@@ -57,16 +67,22 @@ func TestVerifyAndLoadVerifiedBufferInvariant(t *testing.T) {
 			if !ok || calleeName(call) != "ReadFile" || len(call.Args) != 2 {
 				return true
 			}
+			readAssign = node
+			readPos = node.Pos()
 			readBuf = identName(node.Lhs[0])
 			readPath = identName(call.Args[1])
 		case *ast.CallExpr:
 			switch calleeName(node) {
+			case "ReadFile":
+				readFileCalls++
 			case "Verify":
 				if len(node.Args) == 1 {
+					verifyPos = node.Pos()
 					verifyBuf = identName(node.Args[0])
 				}
 			case "LoadImageBuffer":
 				if len(node.Args) == 3 {
+					loadPos = node.Pos()
 					loadPath = identName(node.Args[1])
 					loadBuf = identName(node.Args[2])
 				}
@@ -83,6 +99,12 @@ func TestVerifyAndLoadVerifiedBufferInvariant(t *testing.T) {
 	if readBuf == "" || readPath == "" {
 		t.Fatal("verifyAndLoad must read the image via fs.ReadFile(root, <path>)")
 	}
+	if readFileCalls != 1 {
+		t.Fatalf("verifyAndLoad contains %d ReadFile calls, want exactly 1: a re-read after Verify would execute unverified bytes", readFileCalls)
+	}
+	if verifyBuf == "" {
+		t.Fatal("verifyAndLoad must verify the image via Verify(<buffer>)")
+	}
 	if loadBuf == "" || loadPath == "" {
 		t.Fatal("verifyAndLoad must load via LoadImageBuffer(root, <path>, <buffer>)")
 	}
@@ -98,6 +120,29 @@ func TestVerifyAndLoadVerifiedBufferInvariant(t *testing.T) {
 	if loadBuf != readBuf {
 		t.Errorf("LoadImageBuffer is given buffer %q, want the verified read buffer %q", loadBuf, readBuf)
 	}
+
+	// Source order must be read, then verify, then load: verifying after the
+	// load (or loading before the verify) reopens the verify-then-load window.
+	if readPos >= verifyPos || verifyPos >= loadPos {
+		t.Errorf("source order must be fs.ReadFile (%v) < Verify (%v) < LoadImageBuffer (%v)",
+			fset.Position(readPos), fset.Position(verifyPos), fset.Position(loadPos))
+	}
+
+	// The read buffer must never be written again after the initial read: any
+	// reassignment could swap in unverified bytes between Verify and load.
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok || assign == readAssign {
+			return true
+		}
+		for _, lhs := range assign.Lhs {
+			if identName(lhs) == readBuf && assign.Pos() > readPos {
+				t.Errorf("%v: %q is reassigned after the initial fs.ReadFile; the verified buffer must stay immutable until LoadImageBuffer",
+					fset.Position(assign.Pos()), readBuf)
+			}
+		}
+		return true
+	})
 }
 
 // calleeName returns the method/function name a call expression invokes,
