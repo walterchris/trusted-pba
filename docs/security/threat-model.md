@@ -116,7 +116,14 @@ residual risk → tests → risk IDs.
   to an insecure boot.
 - **Mitigations:** Secure Boot enforcement gate (`require_secure_boot` ⇒ refuse to
   boot unless `SecureBoot==1 && SetupMode==0`); never treat SB-off == SB-on; SED
-  remains locked until authentication (planned Phase 4–6); no unlock material in
+  remains locked until authentication — wired (Phase 6, ADR-0009) and now
+  exercised end-to-end by the QEMU MockOpalDxe integration matrix
+  (`mock-opal-matrix`), whose refuse-to-boot assertions are **mutation-proven**
+  (a PBA mutated to fall through to chainload after a failed unlock fails the
+  matrix; harness FORBID liveness re-proven by `harness-selftest.sh` on every
+  run — review record
+  `evidence/security-review-records/2026-06-10-mock-opal-integration-matrix-22.md`);
+  hardware validation pending (Phase 8); no unlock material in
   logs (opal-layer silence enforced at the file-descriptor level,
   `TestUnlockEmitsNoConsoleOutput`); client-side PIN buffers zeroized on all paths
   (#51 item 1).
@@ -161,9 +168,14 @@ residual risk → tests → risk IDs.
 - **Mitigations:** pinned module versions; vendored materials byte-identical to
   upstream with recorded SHA-256 + commit (`PROVENANCE.md`); the **`walterchris/go-boot`
   fork** (ADR-0008) is a first-party-maintained dependency, pinned by tag
-  (`v1.6.2-tpba.2`) + `go.sum` hash, with a minimal additive patch over upstream
-  v1.6.2 (small, reviewable diff); dependency onboarding/scan **planned** (#27);
-  SBOM/vuln-scan CI **skeleton** (#9).
+  (`v1.6.2-tpba.3`) + `go.sum` hash; its patch set over upstream v1.6.2 is
+  additive files **plus exactly one functional edit to an upstream file** — the
+  `callFn` stack-alignment fix in `uefi/uefi.s` (2 instructions + comment, fixing
+  a latent upstream ABI bug; ADR-0008 Amendment 2026-06-10) — so the
+  fork-vs-upstream diff now includes assembly in the TCB call path, kept tiny and
+  individually security-reviewed
+  (`evidence/security-review-records/2026-06-10-go-boot-tpba3-abi-fixes.md`);
+  dependency onboarding/scan **planned** (#27); SBOM/vuln-scan CI **skeleton** (#9).
 - **Residual risk:** medium until #27/#9 land vuln + license scanning (must cover the
   fork).
 - **Tests:** `TestRealMicrosoftSignedImage` (materials validate a real signed
@@ -261,6 +273,9 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock library + Phase 6 boot w
 | Unlock secret never logged, buffers zeroized | `internal/opal` `TestUnlockEmitsNoConsoleOutput` (fd-level), `TestUnlockZeroizesSecrets`, `TestTransactZeroizesMethodPayload`, `TestStartSessionGrowBudget`, `TestBuilderGrowPreventsReallocation` |
 | Verified bytes are the loaded bytes (no re-read TOCTOU) | `cmd/pba` `TestVerifyAndLoadVerifiedBufferInvariant` (ordering + single-read + reassignment ban, mutation-verified) |
 | SED unlock gate fails closed in the boot path | `internal/policy` `TestParseSEDUnlock`, `TestParseFailsClosed` (absence = required); `cmd/pba` `TestUnlockSEDNoneSkipsLoudly`, `TestUnlockSEDRequiredHappyPath`, `TestUnlockSEDFailsClosedOnWrongPIN`, `TestUnlockSEDFailsClosedOnTransportFault`, `TestUnlockSEDFailsClosedWithoutCarrier` |
+| SED unlock end-to-end over the real UEFI Storage Security path (QEMU + EDK2 MockOpalDxe) | `mock-opal-matrix` `unlock-chainload` (full unlock + MBRDone + chainload), `secure-boot` (SB enforcing, db-signed driver/PBA/fixture, driver markers REQUIREd so a silently-skipped driver cannot false-pass); CI job `mock-opal-integration` |
+| Unlock failure never reaches chainload (incl. partial unlock, missing device) | `mock-opal-matrix` `auth-fail`, `fail-mbrdone`, `fail-after-unlock` (partial unlock), `no-driver` — FORBID on chainload markers, mutation-proven (fail-open PBA mutant fails `auth-fail`) |
+| Harness FORBID assertions stay live to end of run (no false PASS) | `test/qemu/harness-selftest.sh` (QEMU-free, runs at the start of every matrix invocation; covers fail-open-then-halt, fail-open-then-EOF, grace-bounded clean negative, early FORBID, missing REQUIRE) |
 
 ## 10. Change log
 
@@ -272,3 +287,5 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock library + Phase 6 boot w
 | 2026-06-10 | #51 item 1 (Phase 5/6 gate): PIN-buffer zeroization in `internal/opal` — caller pin, method payload, and transmitted ComPacket frames cleared on success and all failure paths; tested grow budget prevents append reallocation; fd-level log-scrub test asserts opal-layer silence + PIN-free error text (mutation-verified). A1/A7, §6.2, and attack tree B.1/B.2 updated; R-003 residual Medium → Low. Boot-path PIN-*input* zeroization remains open for the Phase 6 wiring (#51 item 2). |
 | 2026-06-10 | #46: chainload from the verified in-memory buffer via the fork's `LoadImageBuffer` (pin `v1.6.2-tpba.2`) closes the SB-off verify-then-load TOCTOU (attack tree A.3); R-012 Open → Mitigated. §6.1 residual risk, A.3, §8 summary, and test mapping updated. Review record: `evidence/security-review-records/2026-06-10-chainload-verified-buffer-46.md`. |
 | 2026-06-10 | Phase 6 boot-path wiring (#22, #51 item 2, ADR-0009): policy-gated `sed_unlock` (`required`\|`none`, absence = required, `none` logged loudly) drives `opal.Unlock` over the UEFI transport before any chainload; any error — incl. partial unlock and missing Storage Security device — terminates via the on-error action, no retry/fallback. A1/A7 move to *wired*; MVP compiled-in PIN residual documented (ADR-0009). QEMU MockOpalDxe end-to-end is the next Phase 6 ticket. |
+| 2026-06-10 | go-boot fork `v1.6.2-tpba.3` (#22, ADR-0008 Amendment 2026-06-10): two UEFI ABI fixes found by the integration matrix's first real run — SSC slot-dispatch double-dereference in the additive `storagesecurity.go` (+ fail-closed NULL-slot check) and the `callFn` stack-alignment pad in upstream's `uefi/uefi.s` (latent upstream bug; also affects upstream SNP Transmit/Receive). §6.6 updated: the fork patch set is no longer purely additive — one reviewed upstream-file edit, to be submitted upstream. Review record: `evidence/security-review-records/2026-06-10-go-boot-tpba3-abi-fixes.md`. |
+| 2026-06-10 | Phase 6 QEMU MockOpalDxe integration matrix (#22): six scenarios (unlock-chainload, auth-fail, fail-mbrdone, fail-after-unlock partial unlock, no-driver, secure-boot) exercise the boot path end-to-end over the real UEFI Storage Security protocol; real `mock-opal-integration` CI job; release artifacts gated on a non-`none` default SED policy. Security review found and fixed a harness false-PASS (FORBID dead after the final REQUIRE) — grace-window drain + `harness-selftest.sh` + end-to-end mutation proof. §6.2 and test mapping updated. Review record: `evidence/security-review-records/2026-06-10-mock-opal-integration-matrix-22.md`. |
