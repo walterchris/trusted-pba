@@ -115,13 +115,13 @@ func (c *Client) startSession(spID, auth UID, pin []byte) error {
 		return fmt.Errorf("opal: start session: %w", err)
 	}
 	if gotHSN != hsn {
-		return fmt.Errorf("opal: start session: host session id mismatch")
+		return fmt.Errorf("opal: start session: %w: host session id mismatch", ErrMethod)
 	}
 	// TSN 0 is the control session; a real session must have a non-zero TSN. Reject
 	// a (success-status) SyncSession that omits it so later Sets cannot be issued on
 	// the control session.
 	if tsn == 0 {
-		return fmt.Errorf("opal: start session: TPer assigned no session id")
+		return fmt.Errorf("opal: start session: %w: TPer assigned no session id", ErrMethod)
 	}
 	c.hsn, c.tsn = gotHSN, tsn
 	return nil

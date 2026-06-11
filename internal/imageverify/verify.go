@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/foxboron/go-uefi/authenticode"
@@ -86,12 +87,12 @@ func (v *Verifier) Verify(image []byte) error {
 	for _, sig := range sigs {
 		ac, err := authenticode.ParseAuthenticode(sig.Certificate)
 		if err != nil {
-			continue
+			continue // unparseable signature block; try the next embedded signature
 		}
 		certs := ac.Pkcs.Certs
 		for _, leaf := range certs {
 			if ok, err := pe.Verify(leaf); err != nil || !ok {
-				continue
+				continue // this cert did not sign the image; try the next candidate
 			}
 			// leaf signed the image. Reject immediately if the leaf is revoked.
 			if v.revoked(leaf) {
@@ -143,10 +144,5 @@ func ignoreValidity(c *x509.Certificate) *x509.Certificate {
 
 // revoked reports whether c appears in the dbx certificate list.
 func (v *Verifier) revoked(c *x509.Certificate) bool {
-	for _, r := range v.DBXCerts {
-		if c.Equal(r) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(v.DBXCerts, c.Equal)
 }

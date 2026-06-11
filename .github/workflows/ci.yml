@@ -144,9 +144,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends shim-signed
       - name: Verify a genuine Microsoft-signed image (full accepts / windows-only rejects)
         run: |
-          shim=$(ls /usr/lib/shim/shimx64.efi.signed.latest \
-                    /usr/lib/shim/shimx64.efi.signed \
-                    /usr/lib/shim/shim.efi.signed 2>/dev/null | head -1)
+          # First existing candidate in written preference order (ls would sort
+          # alphabetically and drop that order, e.g. picking .signed over .latest).
+          shim=""
+          for c in /usr/lib/shim/shimx64.efi.signed.latest \
+                   /usr/lib/shim/shimx64.efi.signed \
+                   /usr/lib/shim/shim.efi.signed; do
+            if [ -f "$c" ]; then shim="$c"; break; fi
+          done
           if [ -z "$shim" ]; then echo "no signed shim found in /usr/lib/shim" >&2; exit 1; fi
           echo "using shim: $shim"
           TPBA_REAL_SHIM="$shim" go test ./internal/truststore/ -run TestRealMicrosoftSignedImage -v
