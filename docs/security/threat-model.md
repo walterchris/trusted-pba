@@ -174,13 +174,14 @@ residual risk → tests → risk IDs.
 - **Mitigations:** pinned module versions; vendored materials byte-identical to
   upstream with recorded SHA-256 + commit (`PROVENANCE.md`); the **`walterchris/go-boot`
   fork** (ADR-0008) is a first-party-maintained dependency, pinned by tag
-  (`v1.6.2-tpba.3`) + `go.sum` hash; its patch set over upstream v1.6.2 is
-  additive files **plus exactly one functional edit to an upstream file** — the
-  `callFn` stack-alignment fix in `uefi/uefi.s` (2 instructions + comment, fixing
-  a latent upstream ABI bug; ADR-0008 Amendment 2026-06-10) — so the
-  fork-vs-upstream diff now includes assembly in the TCB call path, kept tiny and
-  individually security-reviewed
-  (`evidence/security-review-records/2026-06-10-go-boot-tpba3-abi-fixes.md`);
+  (`v1.6.2-tpba.4`) + `go.sum` hash; its patch set over upstream v1.6.2 is
+  additive files **plus a few small functional edits to upstream files** — the
+  `callFn` stack-alignment fix in `uefi/uefi.s`, the `path.go` device-path
+  Length-underflow guard, and `error.go` typed status errors (ADR-0008 Amendments
+  2026-06-10/06-11) — so the fork-vs-upstream diff includes assembly in the TCB
+  call path, kept tiny and individually security-reviewed
+  (`evidence/security-review-records/2026-06-10-go-boot-tpba3-abi-fixes.md`,
+  `evidence/security-review-records/2026-06-11-go-boot-tpba4-audit-followups.md`);
   dependency onboarding/scan **planned** (#27); SBOM/vuln-scan CI **skeleton** (#9).
 - **Residual risk:** medium until #27/#9 land vuln + license scanning (must cover the
   fork).
@@ -296,3 +297,4 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock library + Phase 6 boot w
 | 2026-06-10 | go-boot fork `v1.6.2-tpba.3` (#22, ADR-0008 Amendment 2026-06-10): two UEFI ABI fixes found by the integration matrix's first real run — SSC slot-dispatch double-dereference in the additive `storagesecurity.go` (+ fail-closed NULL-slot check) and the `callFn` stack-alignment pad in upstream's `uefi/uefi.s` (latent upstream bug; also affects upstream SNP Transmit/Receive). §6.6 updated: the fork patch set is no longer purely additive — one reviewed upstream-file edit, to be submitted upstream. Review record: `evidence/security-review-records/2026-06-10-go-boot-tpba3-abi-fixes.md`. |
 | 2026-06-10 | Phase 6 QEMU MockOpalDxe integration matrix (#22): six scenarios (unlock-chainload, auth-fail, fail-mbrdone, fail-after-unlock partial unlock, no-driver, secure-boot) exercise the boot path end-to-end over the real UEFI Storage Security protocol; real `mock-opal-integration` CI job; release artifacts gated on a non-`none` default SED policy. Security review found and fixed a harness false-PASS (FORBID dead after the final REQUIRE) — grace-window drain + `harness-selftest.sh` + end-to-end mutation proof. §6.2 and test mapping updated. Review record: `evidence/security-review-records/2026-06-10-mock-opal-integration-matrix-22.md`. |
 | 2026-06-10 | Phase 6 wrap-up (#60 merged; epics #22/#19 closed): staleness refresh only. Status header updated from "through Phase 3" to coverage through Phase 6 (unlock wired + QEMU e2e); TB3 (PBA → SED transport) updated from *planned* to live (Phase 5 transport, Phase 6 e2e, hardware pending Phase 8); §4 Opal response parsing no longer *planned* (shipped + fuzzed in Phase 4). No new threats, no mitigation or risk changes. |
+| 2026-06-11 | go-boot fork `v1.6.2-tpba.4` (audit #11, ADR-0008 Amendment 2026-06-11): §6.6 pin → tpba.4. Added upstream-file edits — `path.go` device-path Length<4 underflow guard (F-L5, a chainload-path panic on a malformed firmware device path) and `error.go` typed status errors (F-S3) — alongside the existing `uefi.s` alignment fix; F-S4 retained (audit false positive: the `dummy:` block is load-bearing for the assembler's PUSH/POP balance). No new threats; firmware remains trusted at the device-path boundary. Review record: `evidence/security-review-records/2026-06-11-go-boot-tpba4-audit-followups.md`. |

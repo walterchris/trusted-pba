@@ -7,7 +7,9 @@ PR. Authored in Phase 5. Amended 2026-06-10: pin bumped to `v1.6.2-tpba.2`
 `v1.6.2-tpba.3` (fork commits `a5b1163` — SSC slot-dispatch fix in our additive
 `uefi/storagesecurity.go` — and `558b95b` — `callFn` stack-alignment fix in
 upstream's `uefi/uefi.s`; see *Amendment 2026-06-10* below — the patch set is no
-longer purely additive).
+longer purely additive). Amended 2026-06-11: pin bumped to `v1.6.2-tpba.4`
+(commit `6db0670`, full-codebase-audit follow-ups; see *Amendment 2026-06-11*
+below).
 
 ## Context
 go-boot v1.6.2 wraps only a **fixed set** of UEFI protocols/services (graphics,
@@ -31,7 +33,7 @@ dependency layer (rather than adding `unsafe`/assembly to the product).
   module path is renamed to `github.com/walterchris/go-boot`; the Trusted PBA
   imports it **by that name** (a plain `require`, no `replace` — replace-with-rename
   causes a "module used for two paths" conflict). Pinned by the tag
-  **`v1.6.2-tpba.3`** (upstream v1.6.2 + our patch set; see Amendment 2026-06-10)
+  **`v1.6.2-tpba.4`** (upstream v1.6.2 + our patch set; see the Amendments below)
   and locked in `go.sum`.
 - **Addition (minimal, additive):** one file `uefi/storagesecurity.go` —
   `GetStorageSecurity()` (locate + resolve `ReceiveData`/`SendData` pointers via the
@@ -89,6 +91,39 @@ surface additionally gained the fail-closed NULL-slot check above.
 passing matrix after) and the committed review record
 `evidence/security-review-records/2026-06-10-go-boot-tpba3-abi-fixes.md`.
 
+## Amendment (2026-06-11): `v1.6.2-tpba.4` — full-codebase-audit follow-ups
+
+The 2026-06-11 full-codebase audit surfaced four fork items, batched into
+`v1.6.2-tpba.4` (commit `6db0670`):
+
+1. **F-L5 — `uefi/path.go` device-path Length guard (upstream file).** `devicePath()`
+   rejected only `Length == 0 || > 0xff`; a node `Length` of 1..3 made
+   `dataSize = uint16(Length-4)` underflow to ~65533 and the `copy` slice past the
+   DMA buffer — a panic reachable on every chainload via `LoadImageBuffer→FilePath`.
+   Now rejects `Length < 4` (the 4-byte generic node header minimum). The device-path
+   producer is platform firmware (trusted at this boundary), so fail-closed in effect,
+   but it violated the function's own anti-DoS intent.
+2. **F-S3 — typed EFI status errors (upstream `uefi/error.go`).** `parseStatus` now
+   wraps `EFI_NOT_FOUND` as `ErrEfiNotFound` and other non-success statuses as the
+   new `ErrEFIStatus` sentinel, so callers can branch with `errors.Is`.
+3. **F-S4 — `uefi/uefi.s` `dummy:` block: kept, comment rewritten.** The audit flagged
+   the unreachable `POPQ` pair as dead code; it is **not** — it satisfies the Go
+   assembler's per-function PUSH/POP balance check (removing it fails assembly with
+   `unbalanced PUSH/POP`, verified). Comment rewritten so it no longer reads as
+   removable; **no functional change** (audit false positive recorded).
+4. **F-S5 — `uefi/storagesecurity.go` (our additive file): naming.** `SendData`'s
+   laundered payload pointer renamed `buf`→`ptr` to match `ReceiveData`.
+
+This **adds two more upstream-file edits** (`path.go`, `error.go`) on top of the
+`uefi/uefi.s` edit, plus a comment-only `uefi.s` touch. The re-base process
+(re-apply + re-review the upstream diff; upstream the changes) now covers
+`uefi.s` + `path.go` + `error.go`. The `path.go` underflow guard and the `error.go`
+typed errors are good upstream-PR candidates alongside the alignment fix.
+
+**Evidence:** the Trusted PBA QEMU mock-Opal matrix (full unlock→MBRDone→chainload,
+which exercises `devicePath`) passes against this tree; the published tag's `go.sum`
+hash was verified byte-identical to the pinned commit.
+
 ## Alternatives Considered
 - **In-repo `unsafe`+asm UEFI-call primitive** — keeps everything in our tree but
   duplicates go-boot's `callFn` ABI trampoline and puts hand-written assembly in a
@@ -100,10 +135,10 @@ passing matrix after) and the committed review record
 ## Security Impact
 The fork is part of the trusted computing base. Risk: divergence from / unreviewed
 changes vs upstream. Mitigations: the patch is **minimal** (additive files + a
-mechanical module-path rename + since `v1.6.2-tpba.3` one functional upstream-file
-edit, the `uefi.s` alignment fix — see Amendment 2026-06-10), so the diff against
-upstream v1.6.2 is small and reviewable; it is **pinned by tag and `go.sum`
-hash**; and the added code reuses go-boot's existing, audited call machinery
+mechanical module-path rename + a few small functional upstream-file edits — the
+`uefi.s` alignment fix, the `path.go` Length guard, and the `error.go` typed
+errors; see Amendments 2026-06-10 and 2026-06-11), so the diff against upstream
+v1.6.2 is small and reviewable; it is **pinned by tag and `go.sum` hash**; and the added code reuses go-boot's existing, audited call machinery
 rather than introducing new ABI code. The transport's MediaId-0 / first-instance
 limitations are documented in `internal/transport` and deferred to Phase 8. A missing protocol fails closed
 (`New` returns an error). No secrets; the fork carries upstream's license.

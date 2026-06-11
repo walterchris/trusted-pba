@@ -16,7 +16,7 @@ require (
 	// the SSC service dispatch (double dereference) and callFn's stack
 	// alignment for odd stack-argument counts — both caught by the mock-Opal
 	// QEMU integration matrix (#22).
-	github.com/walterchris/go-boot v1.6.2-tpba.3
+	github.com/walterchris/go-boot v1.6.2-tpba.4
 )
 
 require (
