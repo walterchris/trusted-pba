@@ -19,25 +19,17 @@ PBA="${1:?usage: secureboot-matrix.sh <pba.efi> <testapp.efi>}"
 TESTAPP="${2:?usage: secureboot-matrix.sh <pba.efi> <testapp.efi>}"
 HERE="$(dirname "$(readlink -f "$0")")"
 . "$HERE/ovmf-pair.sh"
+. "$HERE/sb-lib.sh"
 EXPECT="$HERE/expect-serial.py"
 
-VFV="${VIRT_FW_VARS:-$HOME/.local/bin/virt-fw-vars}"
-command -v "$VFV" >/dev/null 2>&1 || VFV="virt-fw-vars"
-command -v "$VFV" >/dev/null 2>&1 || {
-	echo "virt-fw-vars not found (set VIRT_FW_VARS or: pip install virt-firmware)" >&2
-	exit 2
-}
+resolve_vfv
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 GUID="$(uuidgen)"
 
 echo "## Generating test PK/KEK/db (throwaway, $WORK)"
-for role in PK KEK db; do
-	openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
-		-subj "/CN=TrustedPBA Test $role/" \
-		-keyout "$WORK/$role.key" -out "$WORK/$role.crt" 2>/dev/null
-done
+gen_test_keys "$WORK" "TrustedPBA Test"
 
 # An extra keypair that is NOT enrolled anywhere — proves that a validly-signed but
 # UNTRUSTED image is still rejected (a signature alone is not trust).
@@ -46,11 +38,7 @@ openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
 	-keyout "$WORK/bad.key" -out "$WORK/bad.crt" 2>/dev/null
 
 echo "## Enrolling keys into OVMF VARS (enforcing) from $OVMF_VARS_TEMPLATE"
-"$VFV" --input "$OVMF_VARS_TEMPLATE" --output "$WORK/vars.secboot.fd" \
-	--set-pk "$GUID" "$WORK/PK.crt" \
-	--add-kek "$GUID" "$WORK/KEK.crt" \
-	--add-db "$GUID" "$WORK/db.crt" \
-	--no-microsoft --secure-boot >/dev/null
+enroll_keys "$OVMF_VARS_TEMPLATE" "$WORK/vars.secboot.fd" "$GUID" "$WORK"
 
 echo "## Signing PBA + fixture with the db key"
 sbsign --key "$WORK/db.key" --cert "$WORK/db.crt" --output "$WORK/pba.signed.efi" "$PBA"
@@ -60,10 +48,6 @@ sbverify --cert "$WORK/db.crt" "$WORK/pba.signed.efi" >/dev/null
 sbsign --key "$WORK/bad.key" --cert "$WORK/bad.crt" --output "$WORK/pba.badsigned.efi" "$PBA"
 
 fail=0
-scenario() {
-	echo; echo "===== $1 ====="; shift
-	if "$@"; then echo "----- ok"; else echo "----- FAILED"; fail=1; fi
-}
 
 # A and B run the default sed_unlock="none" PBA: REQUIRE the loud skip marker
 # and FORBID both unlock outcomes (same guard as the other suites), so a

@@ -29,6 +29,7 @@
 #include <Uefi.h>
 #include <Library/UefiBootServicesTableLib.h>
 #include <Library/UefiRuntimeServicesTableLib.h>
+#include <Library/BaseLib.h>
 #include <Library/BaseMemoryLib.h>
 #include <Library/IoLib.h>
 #include <Protocol/StorageSecurityCommand.h>
@@ -48,6 +49,17 @@
 #define PACKET_HDR_LEN     24
 #define SUBPACKET_HDR_LEN  12
 #define FRAME_HDR_LEN      (COMPACKET_HDR_LEN + PACKET_HDR_LEN + SUBPACKET_HDR_LEN)
+
+// Frame field byte offsets. FrameResponse (encoder) and DecodeFrame (decoder)
+// must agree on these; naming them makes a desync visible at a glance, and
+// disambiguates the SubPacket-length offset from DISCOVERY_LOCKING_FLAGS_OFF
+// (also 52, but in the unrelated Discovery response).
+#define OFF_COMID          4   // extended ComID (ComID in the high 16 bits)
+#define OFF_COMPACKET_LEN  16  // ComPacket payload length
+#define OFF_PKT_TSN        20  // Packet TSN
+#define OFF_PKT_HSN        24  // Packet HSN
+#define OFF_PKT_LEN        40  // Packet payload length
+#define OFF_SUBPKT_LEN     52  // SubPacket payload length (unpadded)
 
 // TCG stream control tokens.
 #define TOK_START_LIST      0xF0
@@ -424,18 +436,18 @@ FrameResponse (
 
   // ComPacket header (offset 0): reserved(4), extendedComID(4: ComID in the
   // high 16 bits), outstanding(4), minTransfer(4), length(4).
-  PutBe16 (&mResp[4], MOCK_COMID_SESSION);
-  PutBe32 (&mResp[16], (UINT32)(PACKET_HDR_LEN + SUBPACKET_HDR_LEN + Padded));
+  PutBe16 (&mResp[OFF_COMID], MOCK_COMID_SESSION);
+  PutBe32 (&mResp[OFF_COMPACKET_LEN], (UINT32)(PACKET_HDR_LEN + SUBPACKET_HDR_LEN + Padded));
 
   // Packet header (offset 20): tsn(4), hsn(4), seq(4), reserved(2),
   // ackType(2), ack(4), length(4). Uses the *current* session state, so an
   // EndOfSession reply (state already cleared) carries zeros — like frame().
-  PutBe32 (&mResp[20], mTsn);
-  PutBe32 (&mResp[24], mHsn);
-  PutBe32 (&mResp[40], (UINT32)(SUBPACKET_HDR_LEN + Padded));
+  PutBe32 (&mResp[OFF_PKT_TSN], mTsn);
+  PutBe32 (&mResp[OFF_PKT_HSN], mHsn);
+  PutBe32 (&mResp[OFF_PKT_LEN], (UINT32)(SUBPACKET_HDR_LEN + Padded));
 
   // SubPacket header (offset 44): reserved(6), kind(2)=0, length(4) unpadded.
-  PutBe32 (&mResp[52], (UINT32)Len);
+  PutBe32 (&mResp[OFF_SUBPKT_LEN], (UINT32)Len);
 
   CopyMem (&mResp[FRAME_HDR_LEN], Payload, Len);
   mRespLen = FRAME_HDR_LEN + Padded;
@@ -457,7 +469,7 @@ DecodeFrame (
   if (Len < FRAME_HDR_LEN) {
     return FALSE;                                       // short frame
   }
-  ComLen = Be32 (&Data[16]);
+  ComLen = Be32 (&Data[OFF_COMPACKET_LEN]);
   if (ComLen + COMPACKET_HDR_LEN > Len) {
     return FALSE;                                       // length exceeds frame
   }
@@ -466,11 +478,11 @@ DecodeFrame (
     *PayloadLen = 0;
     return TRUE;
   }
-  PktLen = Be32 (&Data[40]);
+  PktLen = Be32 (&Data[OFF_PKT_LEN]);
   if (PktLen < SUBPACKET_HDR_LEN || PACKET_HDR_LEN + PktLen > ComLen) {
     return FALSE;                                       // inconsistent packet
   }
-  SubLen = Be32 (&Data[52]);
+  SubLen = Be32 (&Data[OFF_SUBPKT_LEN]);
   if (SubLen > PktLen - SUBPACKET_HDR_LEN || FRAME_HDR_LEN + SubLen > Len) {
     return FALSE;                                       // inconsistent subpacket
   }
@@ -774,8 +786,7 @@ FaultValueIs (
 {
   UINTN  WantLen;
 
-  for (WantLen = 0; Want[WantLen] != '\0'; WantLen++) {
-  }
+  WantLen = AsciiStrLen (Want);
   while (Len > 0 && Buf[Len - 1] == '\0') {  // tolerate a trailing NUL
     Len--;
   }

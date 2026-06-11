@@ -4,8 +4,9 @@
 # /EFI/BOOT/BOOTX64.EFI (the UEFI removable-media default loader, so OVMF boots it
 # with no NVRAM entry or startup.nsh) and boot it under QEMU + OVMF.
 #
-# Pure launcher: serial is routed to stdout (-nographic) and the process is
-# replaced by QEMU. Marker assertion / lifecycle is owned by expect-serial.py.
+# Pure launcher: serial is routed to stdout (-nographic); QEMU runs as a child so
+# the temp ESP/VARS are cleaned up on exit. Marker assertion / lifecycle is owned
+# by expect-serial.py.
 # Runs headless under TCG (no KVM) so it works in CI containers.
 #
 #   run-qemu.sh <app.efi>
@@ -39,8 +40,14 @@ OVMF_VARS="${OVMF_VARS:-$OVMF_VARS_TEMPLATE}"
 [ -f "$OVMF_VARS" ] || { echo "OVMF_VARS not found: $OVMF_VARS" >&2; exit 2; }
 
 WORK="$(mktemp -d)"
-cleanup() { rm -rf "$WORK"; }
+cleanup() {
+	[ -n "${QEMU_PID:-}" ] && kill "$QEMU_PID" 2>/dev/null || true
+	rm -rf "$WORK"
+}
 trap cleanup EXIT
+# Turn a process-group kill (expect-serial.py's teardown) into a normal exit so
+# the EXIT trap runs; QEMU, sharing the group, gets the signal directly too.
+trap 'exit 143' TERM INT
 IMG="$WORK/esp.img"
 VARS="$WORK/vars.fd"
 
@@ -82,13 +89,16 @@ else
 	DISK_ARGS=(-drive "format=raw,file=$IMG")
 fi
 
-# Note: exec replaces this shell with QEMU so the caller's process-group kill
-# reaches QEMU directly. The temp dir is reclaimed by the OS on CI runners; the
-# orchestrator (expect-serial.py) owns teardown.
-exec qemu-system-x86_64 \
+# Run QEMU as a child (not exec) so the cleanup trap reclaims $WORK on exit —
+# under exec the EXIT trap never fired and the per-run ESP/VARS images leaked
+# locally. QEMU shares this script's process group, so expect-serial.py's
+# process-group kill still reaches it; serial stays on the inherited stdout.
+qemu-system-x86_64 \
 	-machine q35 -accel tcg -cpu "$QEMU_CPU" -m "$QEMU_MEM" \
 	-nographic \
 	-drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
 	-drive if=pflash,format=raw,unit=1,file="$VARS" \
 	"${DISK_ARGS[@]}" \
-	-net none -no-reboot
+	-net none -no-reboot &
+QEMU_PID=$!
+wait "$QEMU_PID"
