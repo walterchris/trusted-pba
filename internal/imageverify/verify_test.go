@@ -23,7 +23,7 @@ type ca struct {
 	key  *rsa.PrivateKey
 }
 
-func newCA(t *testing.T, cn string) ca {
+func newCA(t testing.TB, cn string) ca {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -50,20 +50,20 @@ func newCA(t *testing.T, cn string) ca {
 }
 
 // leaf issues a code-signing leaf cert + key signed by the CA.
-func (c ca) leaf(t *testing.T, cn string) (*x509.Certificate, *rsa.PrivateKey) {
+func (c ca) leaf(t testing.TB, cn string) (*x509.Certificate, *rsa.PrivateKey) {
 	t.Helper()
 	return c.leafEKU(t, cn, x509.ExtKeyUsageCodeSigning)
 }
 
 // leafEKU issues a leaf cert + key signed by the CA with the given extended key usage.
-func (c ca) leafEKU(t *testing.T, cn string, eku x509.ExtKeyUsage) (*x509.Certificate, *rsa.PrivateKey) {
+func (c ca) leafEKU(t testing.TB, cn string, eku x509.ExtKeyUsage) (*x509.Certificate, *rsa.PrivateKey) {
 	t.Helper()
 	return c.leafValidity(t, cn, eku, time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2035, 1, 1, 0, 0, 0, 0, time.UTC))
 }
 
 // leafValidity issues a leaf cert + key with an explicit validity window so tests
 // can exercise expired signers.
-func (c ca) leafValidity(t *testing.T, cn string, eku x509.ExtKeyUsage, notBefore, notAfter time.Time) (*x509.Certificate, *rsa.PrivateKey) {
+func (c ca) leafValidity(t testing.TB, cn string, eku x509.ExtKeyUsage, notBefore, notAfter time.Time) (*x509.Certificate, *rsa.PrivateKey) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -89,7 +89,7 @@ func (c ca) leafValidity(t *testing.T, cn string, eku x509.ExtKeyUsage, notBefor
 }
 
 // intermediate issues a subordinate CA cert + key signed by the CA.
-func (c ca) intermediate(t *testing.T, cn string) ca {
+func (c ca) intermediate(t testing.TB, cn string) ca {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -117,7 +117,7 @@ func (c ca) intermediate(t *testing.T, cn string) ca {
 
 // signFixture signs the PE fixture with leafKey/leafCert, embedding extra certs
 // (e.g. the issuing CA) so a verifier can build the chain.
-func signFixture(t *testing.T, leafKey *rsa.PrivateKey, leafCert *x509.Certificate, extra ...*x509.Certificate) []byte {
+func signFixture(t testing.TB, leafKey *rsa.PrivateKey, leafCert *x509.Certificate, extra ...*x509.Certificate) []byte {
 	t.Helper()
 	raw, err := os.ReadFile("testdata/sample-pe.bin")
 	if err != nil {

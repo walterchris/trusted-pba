@@ -53,6 +53,8 @@ jobs:
         run: go test -run='^$' -fuzz=FuzzParse -fuzztime=30s ./internal/policy
       - name: opal response parser fuzz (smoke)
         run: go test -run='^$' -fuzz=FuzzResponseParse -fuzztime=30s ./internal/opal
+      - name: imageverify PE/Authenticode parser fuzz (smoke)
+        run: go test -run='^$' -fuzz=FuzzVerify -fuzztime=30s ./internal/imageverify
 
   sast:
     runs-on: ubuntu-latest
