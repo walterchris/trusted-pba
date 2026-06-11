@@ -76,29 +76,62 @@ func TestUnlockFailsClosed(t *testing.T) {
 
 	t.Run("success status but no session id", func(t *testing.T) {
 		dev := NewMockTPer([]byte("pw"))
-		if err := NewClient(zeroTSNTransport{dev}).Unlock(AuthorityAdmin1, []byte("pw")); err == nil {
+		c := NewClient(syncSessionTransport{dev, statusSuccess, 1, 0})
+		if err := c.Unlock(AuthorityAdmin1, []byte("pw")); err == nil {
 			t.Fatal("a SyncSession with TSN 0 must be rejected")
 		}
 		if !dev.Locked() {
 			t.Error("drive must stay locked")
 		}
 	})
+
+	// F-M2: a non-success SyncSession status must be rejected even when the TPer
+	// supplies a valid (non-zero) TSN. Without the checkStatus call in
+	// syncSessionIDs this passes the TSN==0 and HSN guards and would be accepted as
+	// an authenticated session.
+	t.Run("failure status with valid session id", func(t *testing.T) {
+		dev := NewMockTPer([]byte("pw"))
+		c := NewClient(syncSessionTransport{dev, statusAuthLockedOut, 1, 0x1000})
+		if err := c.Unlock(AuthorityAdmin1, []byte("pw")); err == nil {
+			t.Fatal("a failure-status SyncSession must be rejected even with a non-zero TSN")
+		}
+		if !dev.Locked() {
+			t.Error("drive must stay locked on failure-status SyncSession")
+		}
+	})
+
+	// F-L3: the host-session-id echo check must reject a SyncSession whose HSN does
+	// not match the one we sent (session confusion), independent of the TSN guard.
+	t.Run("mismatched host session id", func(t *testing.T) {
+		dev := NewMockTPer([]byte("pw"))
+		c := NewClient(syncSessionTransport{dev, statusSuccess, 2, 0x1000})
+		if err := c.Unlock(AuthorityAdmin1, []byte("pw")); err == nil {
+			t.Fatal("a SyncSession echoing the wrong HSN must be rejected")
+		}
+		if !dev.Locked() {
+			t.Error("drive must stay locked on HSN mismatch")
+		}
+	})
 }
 
-// zeroTSNTransport serves the real discovery but replies to the session exchange
-// with a success-status SyncSession carrying TSN 0 (the control session), modelling
-// a malicious/buggy TPer.
-type zeroTSNTransport struct{ base *MockTPer }
-
-func (z zeroTSNTransport) Send(proto uint8, comID uint16, data []byte) error {
-	return z.base.Send(proto, comID, data)
+// syncSessionTransport serves the real discovery but replies to the session
+// exchange with a crafted SyncSession (status, HSN, TSN), modelling a
+// malicious/buggy TPer. It generalises zeroTSNTransport for the status/HSN guards.
+type syncSessionTransport struct {
+	base     *MockTPer
+	status   uint64
+	hsn, tsn uint32
 }
 
-func (z zeroTSNTransport) Recv(proto uint8, comID uint16, size int) ([]byte, error) {
+func (s syncSessionTransport) Send(proto uint8, comID uint16, data []byte) error {
+	return s.base.Send(proto, comID, data)
+}
+
+func (s syncSessionTransport) Recv(proto uint8, comID uint16, size int) ([]byte, error) {
 	if comID == comIDDiscovery {
-		return z.base.Recv(proto, comID, size)
+		return s.base.Recv(proto, comID, size)
 	}
-	return encodePacket(0x07fe, 0, 0, syncSessionStream(statusSuccess, 1, 0)), nil
+	return encodePacket(0x07fe, 0, 0, syncSessionStream(s.status, s.hsn, s.tsn)), nil
 }
 
 func TestUnlockSkipsMBRWhenDone(t *testing.T) {
