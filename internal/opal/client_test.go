@@ -143,4 +143,10 @@ func TestUnlockSkipsMBRWhenDone(t *testing.T) {
 	if dev.Locked() {
 		t.Error("drive still locked")
 	}
+	// The point of the guard (client.go: MBREnabled && !MBRDone): no MBRControl Set
+	// is issued when MBRDone is already set. The mock's Set is idempotent, so without
+	// this count the test would pass even if Unlock always sent the Set.
+	if dev.mbrSets != 0 {
+		t.Errorf("Unlock sent %d MBRControl Set(s) though MBRDone was already true; want 0", dev.mbrSets)
+	}
 }

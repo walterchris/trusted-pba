@@ -28,8 +28,9 @@ type MockTPer struct {
 	// Session state.
 	tsn, hsn uint32
 
-	fault Fault
-	resp  []byte // pending session response for the next Recv
+	mbrSets int // count of MBRControl Set methods processed (test observability)
+	fault   Fault
+	resp    []byte // pending session response for the next Recv
 }
 
 // Fault selects an injected transport failure for negative tests.
@@ -140,7 +141,10 @@ func (m *MockTPer) handle(payload []byte) []byte {
 		return m.frame([]byte{tokEndOfSession})
 	}
 	toks, err := tokenize(payload)
-	if err != nil || len(toks) < 3 || !toks[0].isControl(tokCall) || !toks[1].isBytes || !toks[2].isBytes {
+	// UID conversions below require 8-byte byte-string atoms; tokenize can yield
+	// shorter ones, so guard the length or the [8]byte conversion panics.
+	if err != nil || len(toks) < 3 || !toks[0].isControl(tokCall) ||
+		!toks[1].isBytes || !toks[2].isBytes || len(toks[2].data) != 8 {
 		return m.frame(resultStream(statusNotAuthorized))
 	}
 	method := UID(toks[2].data)
@@ -161,11 +165,15 @@ func (m *MockTPer) frame(payload []byte) []byte {
 // startSession validates the credential and, on success, opens a session and
 // returns a SyncSession result; otherwise a NOT_AUTHORIZED result.
 func (m *MockTPer) startSession(toks []token) []byte {
-	hsn, _, auth, pin, ok := parseStartSession(toks)
+	hsn, spID, auth, pin, ok := parseStartSession(toks)
 	if !ok {
 		return resultStream(statusNotAuthorized)
 	}
-	// Only Admin1 is provisioned in this mock; the credential must match.
+	// This mock provisions only the Locking SP with an Admin1 credential; reject a
+	// session opened against any other SP, and the credential must match.
+	if spID != uidLockingSP {
+		return resultStream(statusNotAuthorized)
+	}
 	if auth != uidAuthAdmin1 || !bytes.Equal(pin, m.PIN) {
 		return syncSessionStream(statusAuthLockedOut, hsn, 0)
 	}
@@ -191,6 +199,7 @@ func (m *MockTPer) setMethod(toks []token) []byte {
 			}
 		}
 	case uidMBRControl:
+		m.mbrSets++
 		if m.fault == FaultMBRDone {
 			return resultStream(statusFail)
 		}
@@ -244,7 +253,8 @@ func syncSessionStream(status uint64, hsn, tsn uint32) []byte {
 // a StartSession token stream.
 func parseStartSession(toks []token) (hsn uint32, spID, auth UID, pin []byte, ok bool) {
 	// Call SMUID StartSession StartList HSN SPID write [StartName name val EndName]...
-	if len(toks) < 7 || !toks[3].isControl(tokStartList) || !toks[4].isInt || !toks[5].isBytes {
+	if len(toks) < 7 || !toks[3].isControl(tokStartList) || !toks[4].isInt ||
+		!toks[5].isBytes || len(toks[5].data) != 8 {
 		return 0, UID{}, UID{}, nil, false
 	}
 	hsn = u32(toks[4].u)
@@ -275,7 +285,7 @@ func parseStartSession(toks []token) (hsn uint32, spID, auth UID, pin []byte, ok
 
 // parseSet extracts the invoking object and the written columns from a Set stream.
 func parseSet(toks []token) (invoker UID, cols []column, ok bool) {
-	if len(toks) < 8 || !toks[1].isBytes {
+	if len(toks) < 8 || !toks[1].isBytes || len(toks[1].data) != 8 {
 		return UID{}, nil, false
 	}
 	invoker = UID(toks[1].data)
