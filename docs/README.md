@@ -21,3 +21,31 @@ Each is filled in via its own ticket; until then it may be empty or a stub.
 
 Required-before-MVP and required-before-customer-release doc sets are listed in the
 compliance baseline §20.
+
+## Authored documents (so far)
+
+Populated as their tickets land; this index links the per-topic docs that now exist.
+
+- **Architecture / ADRs** ([`architecture/adr/`](architecture/adr/)):
+  [0001 use TamaGo](architecture/adr/ADR-0001-use-tamago.md) ·
+  [0002 UEFI-native PBA](architecture/adr/ADR-0002-use-uefi-native-pba.md) ·
+  [0003 Secure Boot model](architecture/adr/ADR-0003-secure-boot-model.md) ·
+  [0004 Opal transport](architecture/adr/ADR-0004-opal-transport-abstraction.md) ·
+  [0005 virtual test strategy](architecture/adr/ADR-0005-virtual-test-strategy.md) ·
+  [0006 chainload mechanism](architecture/adr/ADR-0006-chainload-mechanism.md) ·
+  [0007 policy engine + verification](architecture/adr/ADR-0007-policy-engine-and-verification.md) ·
+  [0008 go-boot fork](architecture/adr/ADR-0008-go-boot-fork.md) ·
+  [0009 boot-path SED unlock](architecture/adr/ADR-0009-boot-path-sed-unlock.md)
+- **Compliance** ([`compliance/`](compliance/)):
+  [CRA scope assessment](compliance/cra-scope-assessment.md) ·
+  [CRA classification](compliance/cra-classification.md) ·
+  [CRA essential-requirements matrix](compliance/cra-essential-requirements-matrix.md) ·
+  [risk assessment](compliance/risk-assessment.md)
+- **Security** ([`security/`](security/)):
+  [threat model](security/threat-model.md)
+- **Development** ([`development/`](development/)):
+  [secure-development process](development/secure-development-process.md) ·
+  [agent-development process](development/agent-development-process.md) ·
+  [release process](development/release-process.md) ·
+  [go coding standards](development/go-coding-standards.md) ·
+  [branching](development/branching.md)
