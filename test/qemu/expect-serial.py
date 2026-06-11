@@ -53,6 +53,11 @@ GRACE = float(os.environ.get("EXPECT_GRACE", "8"))
 
 
 def _markers(env, default):
+    # NOTE: each comma-separated marker is compiled as a REGEX, not a literal.
+    # Markers are expected to be regex-metacharacter-free (the #22 review made the
+    # driver/PBA marker strings plain text precisely so REQUIRE/FORBID can't
+    # silently mis-match); a deliberate pattern like secureboot-matrix.sh's
+    # alternation relies on this. Keep new markers plain, or escape intentionally.
     return tuple(
         re.compile(p.strip().encode())
         for p in os.environ.get(env, default).split(",")

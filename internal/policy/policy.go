@@ -158,8 +158,8 @@ func Parse(data []byte) (*Policy, error) {
 	return &p, nil
 }
 
-// Select returns the boot entry to use. For now this is the first (primary) entry;
-// availability-ordered selection arrives with the chainloader wiring.
+// Select returns the boot entry to use: the first (primary) entry. Selecting
+// among multiple entries by availability is not yet implemented.
 func (p *Policy) Select() (BootEntry, error) {
 	if len(p.Entries) == 0 {
 		return BootEntry{}, ErrNoEntries

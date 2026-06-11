@@ -37,6 +37,12 @@ var Version = "dev"
 // the image is loaded by us, not via the firmware boot-manager device-path policy.
 const bootPolicy = 0
 
+// chainloadFail is the single source of the "chainload failed" prefix that every
+// chainload error path carries. The QEMU harness greps it as a fail-closed oracle
+// (test/qemu/pba-run.sh); single-sourcing it stops a per-site typo from silently
+// decoupling one path from that contract.
+const chainloadFail = "chainload failed"
+
 // out fans console output to the UEFI ConOut (os.Stdout, shown on the VGA/text
 // console) and COM1 serial (x64.UART0, which QEMU's -serial backend reliably
 // captures regardless of how the firmware routes its console). The writer set is
@@ -119,7 +125,7 @@ func newUEFITransport() (opal.Transport, error) {
 }
 
 // chainload dispatches on the entry's validation mode. All error returns are
-// prefixed "chainload failed" so the top-level fail-closed handler is greppable.
+// prefixed chainloadFail so the top-level fail-closed handler is greppable.
 func chainload(e policy.BootEntry) error {
 	switch e.Validation {
 	case policy.Firmware:
@@ -127,7 +133,7 @@ func chainload(e policy.BootEntry) error {
 	case policy.PBA:
 		return verifyAndLoad(e.Path)
 	default:
-		return fmt.Errorf("chainload failed: unknown validation mode %q", e.Validation)
+		return fmt.Errorf("%s: unknown validation mode %q", chainloadFail, e.Validation)
 	}
 }
 
@@ -145,27 +151,27 @@ func chainload(e policy.BootEntry) error {
 func verifyAndLoad(target string) error {
 	root, err := x64.UEFI.Root()
 	if err != nil {
-		return fmt.Errorf("chainload failed: open ESP: %w", err)
+		return fmt.Errorf("%s: open ESP: %w", chainloadFail, err)
 	}
 	if root == nil {
 		// Dead code against the current pinned fork (Root() never returns a nil
 		// root with a nil error); kept against future fork changes, since both
 		// fs.ReadFile and LoadImageBuffer→root.FilePath dereference root.
-		return fmt.Errorf("chainload failed: open ESP: nil root volume")
+		return fmt.Errorf("%s: open ESP: nil root volume", chainloadFail)
 	}
 	fmt.Fprintf(out, "%s: ESP opened\r\n", banner)
 
 	image, err := fs.ReadFile(root, target)
 	if err != nil {
-		return fmt.Errorf("chainload failed: read %q: %w", target, err)
+		return fmt.Errorf("%s: read %q: %w", chainloadFail, target, err)
 	}
 
 	store, err := truststore.Load()
 	if err != nil {
-		return fmt.Errorf("chainload failed: trust store: %w", err)
+		return fmt.Errorf("%s: trust store: %w", chainloadFail, err)
 	}
 	if err := store.Verifier().Verify(image); err != nil {
-		return fmt.Errorf("chainload failed: verify %q: %w", target, err)
+		return fmt.Errorf("%s: verify %q: %w", chainloadFail, target, err)
 	}
 	fmt.Fprintf(out, "%s: pba-verified %s (trust set %s)\r\n", banner, target, truststore.TrustSet)
 
@@ -173,12 +179,12 @@ func verifyAndLoad(target string) error {
 	if err != nil {
 		// Discard img unconditionally: firmware may return a valid handle
 		// alongside EFI_SECURITY_VIOLATION; it must never be started or kept.
-		return fmt.Errorf("chainload failed: load %q: %w", target, err)
+		return fmt.Errorf("%s: load %q: %w", chainloadFail, target, err)
 	}
 	fmt.Fprintf(out, "%s: starting %s\r\n", banner, target)
 
 	if err := x64.UEFI.Boot.StartImage(img); err != nil {
-		return fmt.Errorf("chainload failed: start %q: %w", target, err)
+		return fmt.Errorf("%s: start %q: %w", chainloadFail, target, err)
 	}
 	return nil
 }
@@ -188,18 +194,25 @@ func verifyAndLoad(target string) error {
 func load(target string) error {
 	root, err := x64.UEFI.Root()
 	if err != nil {
-		return fmt.Errorf("chainload failed: open ESP: %w", err)
+		return fmt.Errorf("%s: open ESP: %w", chainloadFail, err)
 	}
 	fmt.Fprintf(out, "%s: ESP opened\r\n", banner)
 
+	if root == nil {
+		// Defense-in-depth, mirroring verifyAndLoad: dead against the current
+		// pinned fork (Root() never returns a nil root with a nil error), kept
+		// because LoadImage dereferences root.
+		return fmt.Errorf("%s: open ESP: nil root volume", chainloadFail)
+	}
+
 	img, err := x64.UEFI.Boot.LoadImage(bootPolicy, root, target)
 	if err != nil {
-		return fmt.Errorf("chainload failed: load %q: %w", target, err)
+		return fmt.Errorf("%s: load %q: %w", chainloadFail, target, err)
 	}
 	fmt.Fprintf(out, "%s: starting %s\r\n", banner, target)
 
 	if err := x64.UEFI.Boot.StartImage(img); err != nil {
-		return fmt.Errorf("chainload failed: start %q: %w", target, err)
+		return fmt.Errorf("%s: start %q: %w", chainloadFail, target, err)
 	}
 	return nil
 }

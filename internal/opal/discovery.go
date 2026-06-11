@@ -98,7 +98,7 @@ func buildDiscovery(d *Discovery) []byte {
 		lock |= 0x20
 	}
 
-	body := make([]byte, 0, 32)
+	body := make([]byte, 0, 36) // two features: featureHdrLen+12 and featureHdrLen+16
 	// Locking feature (0x0002), 12 bytes of feature data.
 	lf := make([]byte, featureHdrLen+12)
 	binary.BigEndian.PutUint16(lf[0:], featLocking)

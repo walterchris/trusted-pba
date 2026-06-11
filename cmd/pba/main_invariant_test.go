@@ -64,7 +64,7 @@ func TestVerifyAndLoadVerifiedBufferInvariant(t *testing.T) {
 				return true
 			}
 			call, ok := node.Rhs[0].(*ast.CallExpr)
-			if !ok || calleeName(call) != "ReadFile" || len(call.Args) != 2 {
+			if !ok || !isCallTo(call, "fs", "ReadFile") || len(call.Args) != 2 {
 				return true
 			}
 			readAssign = node
@@ -72,21 +72,21 @@ func TestVerifyAndLoadVerifiedBufferInvariant(t *testing.T) {
 			readBuf = identName(node.Lhs[0])
 			readPath = identName(call.Args[1])
 		case *ast.CallExpr:
-			switch calleeName(node) {
-			case "ReadFile":
+			switch {
+			case isCallTo(node, "fs", "ReadFile"):
 				readFileCalls++
-			case "Verify":
+			case calleeName(node) == "Verify":
 				if len(node.Args) == 1 {
 					verifyPos = node.Pos()
 					verifyBuf = identName(node.Args[0])
 				}
-			case "LoadImageBuffer":
+			case calleeName(node) == "LoadImageBuffer":
 				if len(node.Args) == 3 {
 					loadPos = node.Pos()
 					loadPath = identName(node.Args[1])
 					loadBuf = identName(node.Args[2])
 				}
-			case "LoadImage":
+			case calleeName(node) == "LoadImage":
 				sawLoadImage = true
 			}
 		}
@@ -143,6 +143,19 @@ func TestVerifyAndLoadVerifiedBufferInvariant(t *testing.T) {
 		}
 		return true
 	})
+}
+
+// isCallTo reports whether call is `<pkg>.<method>(...)` with pkg a plain
+// identifier — e.g. isCallTo(call, "fs", "ReadFile"). A host AST test cannot
+// import the tamago build to resolve types, so this pins the leaf selector and
+// its immediate receiver, which defeats a shadowed-name decoy (a local ReadFile);
+// deeper decoys are bounded by the QEMU reject matrix as the behavioral backstop.
+func isCallTo(call *ast.CallExpr, pkg, method string) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != method {
+		return false
+	}
+	return identName(sel.X) == pkg
 }
 
 // calleeName returns the method/function name a call expression invokes,

@@ -126,6 +126,14 @@ func parseDBX(update []byte) (map[string]struct{}, []*x509.Certificate, error) {
 				}
 				certs = append(certs, cert)
 			}
+		case signature.CERT_EXTERNAL_MANAGEMENT_GUID:
+			// Legitimately carries no revocation entries (UEFI 2.10 §32.4.1): the
+			// list is managed by an external agent. Nothing to enforce; skip.
+		default:
+			// Any other ESL type carries revocation entries this parser cannot
+			// enforce (e.g. SHA-384/512 hashes). Dropping them would silently
+			// shrink the revocation set, so fail closed rather than under-revoke.
+			return nil, nil, fmt.Errorf("dbx: unsupported ESL signature type %v", sl.SignatureType)
 		}
 	}
 	return hashes, certs, nil
