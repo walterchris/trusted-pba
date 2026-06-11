@@ -1,18 +1,36 @@
-> **DRAFT — partial verification rigor.** This audit's Find phase (24 finders, 96 raw
-> findings) completed fully. The adversarial Verify phase was interrupted by an org
-> spend limit: findings in `internal/opal` (and part of the go-boot fork) received the
-> full 2-of-3 independent-refuter protocol; findings in policy/bootflow/tooling/
-> supply-chain were dispositioned by the single synthesis pass against code and
-> evidence records instead. Confirmed findings are reliable (they survived scrutiny);
-> the *refuted* appendix entries for the affected areas carry single-reviewer
-> confidence and can be re-verified by resuming workflow run `wf_34549ffb-bcd` once
-> budget is available. Scope line below was emitted by the synthesis agent and is
-> wrong about the branch: the audited tree is `main` post-Phase-6 (2026-06-10).
-
 # Security review record — full-codebase audit (synthesis)
 
 - **Date:** 2026-06-11
-- **Scope:** full repository at `feat/phase-5-uefi-transport` (HEAD `1b4a206`), including the pinned `walterchris/go-boot` fork (`v1.6.2-tpba.3`, ADR-0008), `test/edk2-mock-opal/`, QEMU harness, and CI/release workflows.
+- **Scope:** full repository on `main` post-Phase-6, including the pinned `walterchris/go-boot` fork (`v1.6.2-tpba.3`, ADR-0008), `test/edk2-mock-opal/`, QEMU harness, and CI/release workflows.
+
+> **Verification-rigor note.** The Find phase (24 finders, 96 raw findings) completed
+> fully. The adversarial Verify phase was interrupted by an org spend limit: findings
+> in `internal/opal` (and part of the go-boot fork) received the full 2-of-3
+> independent-refuter protocol; findings in policy/bootflow/tooling/supply-chain were
+> dispositioned by the single synthesis pass against code and evidence records
+> instead. Confirmed findings are reliable (they survived scrutiny); the *refuted*
+> appendix entries for the under-verified areas carry single-reviewer confidence and
+> can be re-verified by resuming workflow run `wf_34549ffb-bcd` once budget allows.
+
+## Disposition (2026-06-11)
+
+All confirmed findings were triaged and addressed across three merged PRs; nothing
+confirmed remains open except items that require the EDK2 build + QEMU matrix / CI to
+verify and so are deferred until the agent pipeline is available again.
+
+- **PR #62** — F-M1 (grow-budget reservation pinned at the real call site; R-003
+  evidence wording corrected), F-M2 (SyncSession status-check negative test), F-L3
+  (HSN echo-match negative test). All mutation-verified.
+- **PR #63** — F-L1 (mock parser short-UID panic guards + Locking-SP validation),
+  F-L2 (reject truncated 64-bit session ids), F-L4 (MBR-skip assertion).
+- **PR #64** — Go style F-S1/2/6/7/8/9/10/11/12 (incl. F-S8 revocation-set
+  fail-closed default) and locally-verifiable F-S16/F-S20.
+- **Deferred (need EDK2/QEMU/CI to verify):** F-L5, F-S3/4/5 (go-boot fork — bundle
+  with the `tpba.4` + upstream `uefi.s` submission), F-S13/F-S14 (`MockOpalDxe.c`),
+  F-S15/F-S17 (QEMU harness shell), F-S18/F-S19 (CI/Taskfile dedup). Tracked for the
+  agent pipeline once the spend limit clears.
+
+- **Original scope (as audited):** the full repository, the pinned `walterchris/go-boot` fork (`v1.6.2-tpba.3`, ADR-0008), `test/edk2-mock-opal/`, QEMU harness, and CI/release workflows.
 - **Method:** multi-lens audit (security, bugs, tests, style) with independent adversarial verification of every candidate finding (mutation testing and live reproduction where claimed). Items already adjudicated in the existing review records or recorded as accepted residuals in `docs/compliance/risk-assessment.md` were excluded and are not re-reported here.
 - **Verdict:** PASS with findings — no blocker, no high-severity finding.
 
