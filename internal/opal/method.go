@@ -46,24 +46,36 @@ func buildMethod(invoker, method UID, args func(b *builder)) []byte {
 // pin as the given authority against spID (the SP to open).
 func startSessionCmd(hsn uint32, spID UID, auth UID, pin []byte) []byte {
 	return buildMethod(uidSMUID, uidMethodStartSession, func(b *builder) {
-		// Reserve all remaining space up front: no append after the PIN bytes are
-		// written may reallocate, or a stale copy of the PIN would be stranded in an
-		// unreachable backing array that zeroize cannot reach. 64 bytes covers every
-		// token this method emits after this point besides the PIN itself.
-		b.grow(64 + len(pin))
-		b.uint(uint64(hsn)) // HostSessionID
-		b.uid(spID)         // SPID
-		b.uint(1)           // Write = TRUE
-		// HostChallenge (name 0) + HostSigningAuthority (name 3).
-		b.control(tokStartName)
-		b.uint(0)
-		b.bytes(pin)
-		b.control(tokEndName)
-		b.control(tokStartName)
-		b.uint(3)
-		b.uid(auth)
-		b.control(tokEndName)
+		startSessionArgs(b, hsn, spID, auth, pin)
 	})
+}
+
+// startSessionArgs appends the StartSession parameters to b. It reserves all
+// remaining space up front (startSessionReserve): no append after the PIN bytes
+// are written may reallocate, or a stale copy of the PIN would be stranded in an
+// unreachable backing array that zeroize cannot reach.
+func startSessionArgs(b *builder, hsn uint32, spID, auth UID, pin []byte) {
+	startSessionReserve(b, len(pin))
+	b.uint(uint64(hsn)) // HostSessionID
+	b.uid(spID)         // SPID
+	b.uint(1)           // Write = TRUE
+	// HostChallenge (name 0) + HostSigningAuthority (name 3).
+	b.control(tokStartName)
+	b.uint(0)
+	b.bytes(pin)
+	b.control(tokEndName)
+	b.control(tokStartName)
+	b.uint(3)
+	b.uid(auth)
+	b.control(tokEndName)
+}
+
+// startSessionReserve grows b so the remaining StartSession appends cannot
+// reallocate the backing array. 64 bytes covers every token startSessionArgs
+// emits besides the PIN itself (TestStartSessionGrowBudget pins that bound;
+// TestStartSessionReserves pins that this reservation actually happens).
+func startSessionReserve(b *builder, pinLen int) {
+	b.grow(64 + pinLen)
 }
 
 // column is a single table cell value to write in a Set method.

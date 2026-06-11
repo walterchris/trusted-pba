@@ -205,6 +205,37 @@ func TestStartSessionGrowBudget(t *testing.T) {
 	}
 }
 
+// TestStartSessionReserves pins that startSessionArgs actually reserves capacity
+// before writing the PIN (the F-M1 regression: TestStartSessionGrowBudget proves
+// 64 bytes is enough, but a green suite also survived deleting the reservation
+// entirely, leaving a stranded PIN copy). slices.Grow guarantees
+// cap >= len(buf)+n, so a present reservation forces cap to at least
+// prefix+64+len(pin); plain append growth from a tight buffer lands well below
+// that, so removing startSessionReserve turns this test red.
+func TestStartSessionReserves(t *testing.T) {
+	// Short PINs only: with a large PIN, natural append growth overshoots the
+	// reservation floor and would not witness a missing reservation. The 64-byte
+	// budget (independent of PIN length) is pinned by TestStartSessionGrowBudget.
+	for _, tc := range []struct {
+		name string
+		pin  []byte
+	}{
+		{"nil pin", nil},
+		{"short pin", []byte("correct horse")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A tight buffer (make gives cap == len) standing in for buildMethod's
+			// prefix, so natural append growth starts low and stays below the reservation.
+			const prefix = 20
+			b := &builder{buf: make([]byte, prefix)}
+			startSessionArgs(b, ^uint32(0), uidLockingSP, uidAuthAdmin1, tc.pin)
+			if want := prefix + 64 + len(tc.pin); cap(b.buf) < want {
+				t.Errorf("backing array cap %d < reservation %d — startSessionReserve missing; a stale PIN copy can be stranded", cap(b.buf), want)
+			}
+		})
+	}
+}
+
 func TestBuilderGrowPreventsReallocation(t *testing.T) {
 	var b builder
 	b.uint(7)
