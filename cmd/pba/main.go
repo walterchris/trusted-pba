@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 
 	"github.com/walterchris/go-boot/uefi"
 	"github.com/walterchris/go-boot/uefi/x64"
@@ -43,11 +42,10 @@ const bootPolicy = 0
 // decoupling one path from that contract.
 const chainloadFail = "chainload failed"
 
-// out fans console output to the UEFI ConOut (os.Stdout, shown on the VGA/text
-// console) and COM1 serial (x64.UART0, which QEMU's -serial backend reliably
-// captures regardless of how the firmware routes its console). The writer set is
-// fixed for now; making it configurable is tracked in #29.
-var out io.Writer = io.MultiWriter(os.Stdout, x64.UART0)
+// out fans console output to the sinks composed by consoleSinks, whose set is
+// selected at build time (default = UEFI ConOut + COM1 serial; the serialonly tag
+// drops ConOut). See console_default.go / console_serialonly.go.
+var out io.Writer = io.MultiWriter(consoleSinks()...)
 
 func main() {
 	// Disable the UEFI watchdog so the firmware does not auto-reboot on us.
