@@ -23,6 +23,7 @@
   UefiDriverEntryPoint
   UefiBootServicesTableLib
   UefiRuntimeServicesTableLib
+  BaseLib
   BaseMemoryLib
   IoLib
 

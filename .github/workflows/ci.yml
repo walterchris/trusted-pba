@@ -115,12 +115,11 @@ jobs:
           python3 test/qemu/expect-serial.py bin/trusted-pba.efi | tee qemu-serial.log
       - name: QEMU/OVMF fail-closed test (no target staged → chainload must fail)
         shell: bash
-        env:
-          REQUIRE: 'TRUSTED-PBA: sed unlock not required by policy,TRUSTED-PBA: chainload failed'
-          FORBID: 'TRUSTED-PBA: chainload returned,TEST-APP: ok,TRUSTED-PBA: sed unlock ok,TRUSTED-PBA: sed unlock failed'
+        # Markers live in the Taskfile `run-negative` target — single-sourced so a
+        # rename can't desync CI from `task check` (audit F-S18).
         run: |
           set -o pipefail
-          python3 test/qemu/expect-serial.py bin/trusted-pba.efi | tee -a qemu-serial.log
+          task run-negative | tee -a qemu-serial.log
       - name: QEMU/OVMF Secure-Boot-required fail-closed test (require_secure_boot policy, SB off)
         shell: bash
         run: |

@@ -43,6 +43,7 @@ HERE="$(dirname "$(readlink -f "$0")")"
 DRIVER="$HERE/../edk2-mock-opal/MockOpalDxe.efi"
 EXPECT="$HERE/expect-serial.py"
 . "$HERE/ovmf-pair.sh"
+. "$HERE/sb-lib.sh"
 
 [ -f "$DRIVER" ] || { echo "MockOpalDxe.efi not found; run test/edk2-mock-opal/build.sh" >&2; exit 2; }
 
@@ -52,12 +53,7 @@ EXPECT="$HERE/expect-serial.py"
 echo "## harness self-test (expect-serial.py FORBID/grace semantics)"
 "$HERE/harness-selftest.sh"
 
-VFV="${VIRT_FW_VARS:-$HOME/.local/bin/virt-fw-vars}"
-command -v "$VFV" >/dev/null 2>&1 || VFV="virt-fw-vars"
-command -v "$VFV" >/dev/null 2>&1 || {
-	echo "virt-fw-vars not found (set VIRT_FW_VARS or: pip install virt-firmware)" >&2
-	exit 2
-}
+resolve_vfv
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -79,10 +75,6 @@ HAPPY='MOCKOPAL: dispatched,MOCKOPAL: auth ok,MOCKOPAL: unlocked,MOCKOPAL: mbr-d
 NOBOOT='TRUSTED-PBA: sed unlock ok,TEST-APP: ok,TRUSTED-PBA: chainload returned'
 
 fail=0
-scenario() {
-	echo; echo "===== $1 ====="; shift
-	if "$@"; then echo "----- ok"; else echo "----- FAILED"; fail=1; fi
-}
 
 scenario "unlock-chainload: no fault -> full unlock + MBRDone + chainload" \
 	env OVMF_VARS="$WORK/vars.fd" DRIVER="$DRIVER" TESTAPP="$TESTAPP" \
@@ -121,16 +113,8 @@ scenario "no-driver: required policy, no Storage Security device -> fail closed"
 # anywhere, so only the MOCKOPAL markers prove the driver was dispatched.
 echo; echo "## secure-boot: generating + enrolling throwaway test keys"
 GUID="$(uuidgen)"
-for role in PK KEK db; do
-	openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
-		-subj "/CN=TrustedPBA MockOpal Test $role/" \
-		-keyout "$WORK/$role.key" -out "$WORK/$role.crt" 2>/dev/null
-done
-"$VFV" --input "$OVMF_VARS_TEMPLATE" --output "$WORK/vars.sb-enrolled.fd" \
-	--set-pk "$GUID" "$WORK/PK.crt" \
-	--add-kek "$GUID" "$WORK/KEK.crt" \
-	--add-db "$GUID" "$WORK/db.crt" \
-	--no-microsoft --secure-boot >/dev/null
+gen_test_keys "$WORK" "TrustedPBA MockOpal Test"
+enroll_keys "$OVMF_VARS_TEMPLATE" "$WORK/vars.sb-enrolled.fd" "$GUID" "$WORK"
 python3 "$HERE/add-driver-entry.py" "$WORK/vars.sb-enrolled.fd" "$WORK/vars.sb.fd" "$DRVPATH"
 for img in driver:"$DRIVER" pba:"$PBA" testapp:"$TESTAPP"; do
 	sbsign --key "$WORK/db.key" --cert "$WORK/db.crt" \
