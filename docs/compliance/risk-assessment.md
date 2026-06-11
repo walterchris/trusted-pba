@@ -151,10 +151,11 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 - **Threat/path:** crafted PBA/policy/trust-material update via a future update
   channel, a compromised dependency, CI runner, or signing key.
 - **Mitigations:** pinned deps + vendored materials with recorded SHA-256/commit;
-  the `walterchris/go-boot` fork (ADR-0008) pinned by tag (`v1.6.2-tpba.3`) +
-  `go.sum` — its patch set over upstream v1.6.2 is additive files **plus exactly
-  one functional edit to an upstream file** (the `callFn` stack-alignment fix in
-  `uefi/uefi.s`, a latent upstream ABI bug; ADR-0008 Amendment 2026-06-10), a
+  the `walterchris/go-boot` fork (ADR-0008) pinned by tag (`v1.6.2-tpba.4`) +
+  `go.sum` — its patch set over upstream v1.6.2 is additive files **plus a few
+  small functional edits to upstream files** (the `callFn` stack-alignment fix in
+  `uefi/uefi.s`, the `path.go` device-path Length-underflow guard, and the
+  `error.go` typed status errors; ADR-0008 Amendments 2026-06-10/06-11), each a
   tiny, individually security-reviewed diff to be submitted upstream; protected
   `main`, PR-only, signed commits; ephemeral CI test keys (no prod keys in CI).
   **Planned:** signed updates, SLSA provenance, key management, vuln/SBOM scan
@@ -258,4 +259,5 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 | 2026-06-10 | go-boot fork `v1.6.2-tpba.3` (#22, ADR-0008 Amendment 2026-06-10): R-006 mitigation wording corrected — the fork patch set is no longer "minimal additive": it carries one functional upstream-file edit (the `callFn` stack-alignment fix in `uefi/uefi.s`, latent upstream ABI bug, to be submitted upstream) alongside the additive files; SSC slot-dispatch fix + fail-closed NULL-slot check in the additive `storagesecurity.go`. R-012 evidence pin reference updated to the current tag. Review record: `evidence/security-review-records/2026-06-10-go-boot-tpba3-abi-fixes.md`. |
 | 2026-06-10 | Phase 6 QEMU MockOpalDxe integration matrix (#22): R-002 QEMU e2e in place — six-scenario matrix (positive unlock-chainload/secure-boot tied to driver markers; negative auth-fail/fail-mbrdone/fail-after-unlock/no-driver with mutation-proven FORBIDs), real `mock-opal-integration` CI job, release-policy gate; residual stays Medium but narrows to hardware-pending (Phase 8) — local 6/6 + mutation proof in evidence, green CI run on the PR completes the runs-in-CI claim. Harness false-PASS (FORBID dead after final REQUIRE) found, fixed, self-tested. R-006/TB5 accepted sub-residual recorded: EDK2 cache verification is ref-level only. Review record: `evidence/security-review-records/2026-06-10-mock-opal-integration-matrix-22.md`. |
 | 2026-06-11 | Full-codebase audit (DRAFT record) test-evidence fixes: the R-003 grow-budget claim above is now backed by `TestStartSessionReserves` (pins that the reservation is actually performed at the real call site — F-M1), and the SyncSession status/HSN fail-closed guards gained mutation-proven negative tests (F-M2/F-L3, `TestUnlockFailsClosed`). No rating change; closes audit test-evidence gaps for R-002/R-003/R-009. |
+| 2026-06-11 | go-boot fork `v1.6.2-tpba.4` (audit #11, ADR-0008 Amendment 2026-06-11): R-006 pin → tpba.4 and wording updated — the fork now carries a few small functional upstream-file edits (added: `path.go` device-path Length<4 underflow guard [F-L5], `error.go` typed status errors [F-L5/F-S3]) alongside the `uefi.s` alignment fix; F-S4 kept (audit false positive — the `dummy:` block is load-bearing for the assembler), F-S5 naming. QEMU mock-Opal matrix passes against the bump; published-tag hash verified. Review record: `evidence/security-review-records/2026-06-11-go-boot-tpba4-audit-followups.md`. |
 | 2026-06-10 | Phase 6 wrap-up (#60 merged; epics #22/#19 closed): staleness refresh only. Status header updated from "through Phase 3" to coverage through Phase 6 (Opal unlock no longer in the "not yet built" list). R-008 updated: MBRDone is now exercised end-to-end against the EDK2 mock (`unlock-chainload` + `fail-mbrdone`, #22); status Open → Partial, residual stays Medium — real-drive in-session MBRDone timing remains the Phase 8 item. ADR-0009 Proposed → Accepted (§5.3/§23 human gate satisfied by the Release Owner merging #59). No rating changes. |
