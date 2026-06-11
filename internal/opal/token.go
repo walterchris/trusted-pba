@@ -26,10 +26,12 @@ const (
 // ErrToken is returned for any malformed token stream. Callers must fail closed.
 var ErrToken = errors.New("opal: malformed token stream")
 
-// u32 narrows a wire-bounded value to uint32. TCG length and session-id fields are
-// 32-bit on the wire and our payloads are bounded by recvBufSize, so this cannot
-// overflow in practice; centralizing it documents that intent.
-func u32[T int | uint64](v T) uint32 { return uint32(v) } //nolint:gosec // bounded TCG wire value
+// u32 narrows a host-computed length to uint32. The TCG length fields it serializes
+// are bounded by recvBufSize, so this cannot overflow in practice; centralizing it
+// documents that intent. It must NOT be used on device-supplied token integers,
+// which span a full uint64 and need an explicit range check first (see
+// syncSessionIDs).
+func u32[T int | uint64](v T) uint32 { return uint32(v) } //nolint:gosec // bounded host-computed length
 
 // lo8 returns the low byte of a bounded length component.
 func lo8(v int) byte { return byte(v) } //nolint:gosec // low byte of a bounded length

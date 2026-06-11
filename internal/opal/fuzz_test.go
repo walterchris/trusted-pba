@@ -19,5 +19,9 @@ func FuzzResponseParse(f *testing.F) {
 			_, _ = methodStatus(payload)
 			_, _, _ = syncSessionIDs(payload)
 		}
+		// The mock's request-side parsers must also fail closed: handle is the
+		// entry point for the bytes a (test) client could send, and its UID
+		// conversions previously panicked on short byte-string atoms.
+		_ = NewMockTPer([]byte("pw")).handle(data)
 	})
 }

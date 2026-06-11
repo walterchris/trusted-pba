@@ -3,6 +3,7 @@ package opal
 import (
 	"errors"
 	"fmt"
+	"math"
 )
 
 // TCG method status codes (status list of a method result). 0 is success.
@@ -138,7 +139,13 @@ func syncSessionIDs(payload []byte) (hsn, tsn uint32, err error) {
 			if !toks[i+1].isInt || !toks[i+2].isInt {
 				return 0, 0, fmt.Errorf("%w: SyncSession missing session ids", ErrMethod)
 			}
-			return u32(toks[i+1].u), u32(toks[i+2].u), nil
+			// These are device-supplied token integers (up to a full uint64), so
+			// range-check before narrowing: silently truncating would let a TPer
+			// echoing e.g. HSN 0x1_0000_0001 pass the host-session-id match.
+			if toks[i+1].u > math.MaxUint32 || toks[i+2].u > math.MaxUint32 {
+				return 0, 0, fmt.Errorf("%w: SyncSession session id exceeds 32 bits", ErrMethod)
+			}
+			return uint32(toks[i+1].u), uint32(toks[i+2].u), nil
 		}
 		if toks[i].isControl(tokEndOfData) {
 			break
