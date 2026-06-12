@@ -183,6 +183,12 @@ revoked/untrusted images, optionally calls original firmware services first, and
 falls back to PBA validation if firmware rejects. This is likely the best
 long-term product architecture.
 
+> **Not pursued (ADR-0010).** A1 was dropped: the persistent firmware-table hooks
+> need a UEFI→Go reverse-ABI callback TamaGo's UEFI mode does not support
+> out of the box, and the transitive enforcement is largely redundant with
+> firmware Secure Boot (Windows) and shim (Linux). The PBA validates the single
+> image it loads and hands off; the next stage brokers its own downstream trust.
+
 **Sub-approach A2: Hook Security2 Protocol** — hooking
 `EFI_SECURITY2_ARCH_PROTOCOL` is more invasive and firmware-sensitive (global side
 effects, harder to security-review, may interfere with measured boot).
@@ -287,9 +293,15 @@ are specified in the test-tooling track:
   protocol, implement SendData/ReceiveData, map errors, feature detection.
 - **Phase 6 — UEFI Mock Opal Driver:** `MockOpalDxe.efi`, full virtual
   unlock+chainload inside OVMF; fails closed on Opal failure.
-- **Phase 7 — Shim-like Loader Wrapper:** wrap LoadImage/StartImage, validate
-  before start, firmware-trusted Windows path + PBA-trusted custom path, reject
-  untrusted/revoked, log decisions.
+- **Phase 7 — Shim-like Loader Wrapper: DROPPED (ADR-0010, 2026-06-12).** The PBA
+  is a **single-hop trust broker**: it already validates the image it chainloads
+  (firmware-trusted Windows path + PBA-trusted custom path, reject untrusted/
+  revoked, log decisions — Phases 3/6, `cmd/pba`). Wrapping firmware
+  `LoadImage`/`StartImage` to enforce policy *transitively* on the next stage's own
+  loads was dropped: it needs a risky UEFI→Go reverse-ABI callback and is largely
+  redundant with firmware Secure Boot (Windows) and shim (Linux). The loaded EFI
+  app brokers its own downstream trust (shim-style) or relies on firmware-
+  provisioned keys. Reconsider only if a concrete deployment demonstrates the need.
 - **Phase 8 — Real Hardware Bring-up:** SATA/NVMe SED, Shadow MBR boot, unlock,
   MBRDone, Windows/Linux chainload, PSID reset/recovery, per-drive results.
 - **Phase 9 — CI/CD Integration:** virtual CI on every PR (unit, smoke, Secure
@@ -327,9 +339,18 @@ Does target firmware expose `EFI_STORAGE_SECURITY_COMMAND_PROTOCOL` for SATA and
 NVMe SEDs? Is NVMe pass-through needed? Can MBRDone take effect in the same UEFI
 boot session? Does Windows Boot Manager boot cleanly after same-session unlock, or
 require a reboot? How much of `go-boot` can be reused? How much UEFI protocol
-binding is missing in TamaGo/go-boot? Can LoadImage/StartImage wrapping be
-implemented safely in TamaGo? Do we need Security2 hooking on any platform? How do
+binding is missing in TamaGo/go-boot? How do
 we preserve/extend measured boot? How are customer trust anchors provisioned?
+
+> **Resolved (ADR-0010, 2026-06-12):** *"Can LoadImage/StartImage wrapping be
+> implemented safely in TamaGo? Do we need Security2 hooking?"* — wrapping needs a
+> UEFI→Go reverse-ABI callback that TamaGo's UEFI mode does not provide
+> out of the box (feasible in principle but substantial/risky runtime work), and
+> the transitive enforcement it would buy is largely redundant with firmware
+> Secure Boot (Windows) and shim (Linux). **Decision: the PBA is a single-hop
+> trust broker** — it validates the image it loads and does not wrap firmware boot
+> services; the next stage brokers its own downstream trust. Phase 7 and Security2
+> hooking are dropped. See §10 Phase 7 and ADR-0010.
 
 ## 15. Recommended Development Order
 
