@@ -54,7 +54,10 @@ The ten core assets from baseline §10, with current location/status:
 - **TB2 PBA → ESP / second-stage image.** The PBA reads the target image from the
   EFI System Partition (attacker-writable storage) and must validate it before
   transferring control (`internal/imageverify` for `pba` mode; firmware revalidates
-  for `firmware` mode).
+  for `firmware` mode). **Single-hop (ADR-0010):** the PBA validates the one image
+  it chainloads and does not wrap firmware boot services or enforce its policy
+  transitively; the loaded stage brokers its own downstream trust (shim-style) or
+  relies on firmware-provisioned keys.
 - **TB3 PBA → SED (Opal transport).** Live. The Opal layer talks to the drive
   through the abstract `TCGTransport` interface, implemented over the UEFI
   Storage Security Command Protocol (`internal/transport`, Phase 5, ADR-0008)
@@ -298,3 +301,4 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock library + Phase 6 boot w
 | 2026-06-10 | Phase 6 QEMU MockOpalDxe integration matrix (#22): six scenarios (unlock-chainload, auth-fail, fail-mbrdone, fail-after-unlock partial unlock, no-driver, secure-boot) exercise the boot path end-to-end over the real UEFI Storage Security protocol; real `mock-opal-integration` CI job; release artifacts gated on a non-`none` default SED policy. Security review found and fixed a harness false-PASS (FORBID dead after the final REQUIRE) — grace-window drain + `harness-selftest.sh` + end-to-end mutation proof. §6.2 and test mapping updated. Review record: `evidence/security-review-records/2026-06-10-mock-opal-integration-matrix-22.md`. |
 | 2026-06-10 | Phase 6 wrap-up (#60 merged; epics #22/#19 closed): staleness refresh only. Status header updated from "through Phase 3" to coverage through Phase 6 (unlock wired + QEMU e2e); TB3 (PBA → SED transport) updated from *planned* to live (Phase 5 transport, Phase 6 e2e, hardware pending Phase 8); §4 Opal response parsing no longer *planned* (shipped + fuzzed in Phase 4). No new threats, no mitigation or risk changes. |
 | 2026-06-11 | go-boot fork `v1.6.2-tpba.4` (audit #11, ADR-0008 Amendment 2026-06-11): §6.6 pin → tpba.4. Added upstream-file edits — `path.go` device-path Length<4 underflow guard (F-L5, a chainload-path panic on a malformed firmware device path) and `error.go` typed status errors (F-S3) — alongside the existing `uefi.s` alignment fix; F-S4 retained (audit false positive: the `dummy:` block is load-bearing for the assembler's PUSH/POP balance). No new threats; firmware remains trusted at the device-path boundary. Review record: `evidence/security-review-records/2026-06-11-go-boot-tpba4-audit-followups.md`. |
+| 2026-06-12 | TB2 clarified single-hop (ADR-0010): Phase 7 loader-wrapper dropped. The PBA validates the one image it chainloads and does not wrap firmware boot services / enforce policy transitively; the next stage brokers its own downstream trust (shim) or relies on firmware-provisioned keys. No new threats; narrows (does not widen) the PBA's claimed trust boundary. |
