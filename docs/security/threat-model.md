@@ -8,10 +8,11 @@ explicitly confirm "no change" (baseline §10, §23).
   detection + enforcement, PBA policy engine, second-stage image verification,
   Opal/SED unlock wired into the boot path over the UEFI Storage Security
   transport, and the QEMU MockOpalDxe end-to-end matrix — Phases 4–6,
-  ADR-0004/0008/0009). The shim-like loader wrapper (Phase 7), real
-  hardware (Phase 8), and the update/release-signing pipeline are **planned**;
-  their assets and adversaries are modelled here with mitigations marked
-  *planned/deferred* so the gaps are explicit.
+  ADR-0004/0008/0009). The shim-like loader wrapper (Phase 7) was **dropped**
+  (ADR-0010: the PBA is a single-hop trust broker); real hardware (Phase 8) and
+  the update/release-signing pipeline are **planned**; their assets and
+  adversaries are modelled here with mitigations marked *planned/deferred* so the
+  gaps are explicit.
 - **Companion:** quantified risks live in
   [`risk-assessment.md`](../compliance/risk-assessment.md) (R-001..R-013); this
   document references those IDs rather than duplicating the scoring.
