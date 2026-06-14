@@ -1,7 +1,7 @@
 # Virtual CI — runs on every PR, no hardware (compliance baseline §18).
-# NOTE: lint and qemu-smoke are real; the other jobs are SKELETON placeholders
-# (clearly named) that their tracked issues (#9 + phase issues) replace with real
-# implementations. They intentionally do nothing yet.
+# All jobs are real: lint (gofmt/vet/golangci incl. staticcheck+gosec), unit,
+# fuzz-smoke, sast (govulncheck), dependency-scan (go-licenses), sbom
+# (cyclonedx-gomod), secret-scan (gitleaks), and the QEMU matrices.
 name: ci
 
 on:
@@ -56,37 +56,72 @@ jobs:
       - name: imageverify PE/Authenticode parser fuzz (smoke)
         run: go test -run='^$' -fuzz=FuzzVerify -fuzztime=30s ./internal/imageverify
 
+  # staticcheck + gosec run in the `lint` job (golangci-lint). This adds
+  # govulncheck: reachable known-vulnerability analysis over our code + deps
+  # (fails only on vulnerabilities our code actually calls).
   sast:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: static analysis (placeholder)
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: govulncheck
         run: |
-          echo "TODO: govulncheck + staticcheck/gosec; upload to evidence/sast-reports/"
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          "$(go env GOPATH)/bin/govulncheck" ./...
 
+  # Dependency vulnerabilities are covered by govulncheck (sast). This checks
+  # dependency licenses against go-licenses' forbidden set; first-party packages
+  # are ignored (no repo LICENSE yet — tracked in #27).
   dependency-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: dependency + license scan (placeholder)
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: go-licenses check (dependencies)
         run: |
-          echo "TODO: vulnerability + license scan; upload to evidence/dependency-scans/"
+          go install github.com/google/go-licenses@v1.6.0
+          "$(go env GOPATH)/bin/go-licenses" check ./... --ignore github.com/walterchris/trusted-pba
 
   sbom:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: generate SBOM (placeholder)
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: generate CycloneDX SBOM
         run: |
-          echo "TODO: SPDX/CycloneDX SBOM; upload to evidence/sbom/"
+          go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.7.0
+          "$(go env GOPATH)/bin/cyclonedx-gomod" mod -json -output sbom.cdx.json
+      - name: upload SBOM
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
 
+  # gitleaks in git mode scans tracked content + history (respects .gitignore, so
+  # the build-output bin/ is excluded). Pinned binary + checksum (no third-party
+  # action in the trust path).
   secret-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: secret scan (placeholder)
+        with:
+          fetch-depth: 0
+      - name: gitleaks (pinned binary, checksum-verified)
         run: |
-          echo "TODO: gitleaks/trufflehog over the diff"
+          set -euo pipefail
+          ver=8.21.2
+          sha=5bc41815076e6ed6ef8fbecc9d9b75bcae31f39029ceb55da08086315316e3ba
+          curl -fsSL -o gitleaks.tar.gz "https://github.com/gitleaks/gitleaks/releases/download/v${ver}/gitleaks_${ver}_linux_x64.tar.gz"
+          echo "${sha}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks git --no-banner --redact
 
   qemu-smoke:
     runs-on: ubuntu-latest
