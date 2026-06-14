@@ -17,6 +17,9 @@ env:
 vars:
   # --- toolchain ---
   TAMAGO_VERSION: go1.26.4
+  # SHA-256 of tamago-{{.TAMAGO_VERSION}}.linux-amd64.tar.gz, verified on download
+  # (supply-chain hygiene, baseline §14/§19; #27). Recompute when bumping the pin.
+  TAMAGO_SHA256: 829a4ea1eaf72a2e7bf57f06feca82fb97b8f67d8ad8e6d870c27fcc5e720a43
   TAMAGO_ROOT:
     sh: echo "${TAMAGO_ROOT:-$HOME/.tamago/{{.TAMAGO_VERSION}}}"
   TAMAGO_BIN:
@@ -56,6 +59,9 @@ tasks:
       # scheme ~2026-06); the asset keeps the `tamago-` prefix too. Both the tag
       # path and the asset name therefore use `tamago-{{.TAMAGO_VERSION}}`.
       - curl -fsSL -o /tmp/tamago-{{.TAMAGO_VERSION}}.tar.gz https://github.com/usbarmory/tamago-go/releases/download/tamago-{{.TAMAGO_VERSION}}/tamago-{{.TAMAGO_VERSION}}.linux-amd64.tar.gz
+      # Verify the pinned checksum before trusting the toolchain (it is part of the
+      # build TCB). Fails closed on a tampered/changed/corrupt artifact.
+      - echo "{{.TAMAGO_SHA256}}  /tmp/tamago-{{.TAMAGO_VERSION}}.tar.gz" | sha256sum -c -
       # Tarball uses absolute paths (usr/local/tamago-go/...); strip them so the
       # toolchain lands directly under TAMAGO_ROOT (TAMAGO_ROOT/bin/go).
       - tar -xzf /tmp/tamago-{{.TAMAGO_VERSION}}.tar.gz -C "{{.TAMAGO_ROOT}}" --strip-components=3
