@@ -52,7 +52,10 @@ tasks:
       - test -x "{{.TAMAGO_BIN}}"
     cmds:
       - mkdir -p "{{.TAMAGO_ROOT}}"
-      - curl -fsSL -o /tmp/tamago-{{.TAMAGO_VERSION}}.tar.gz https://github.com/usbarmory/tamago-go/releases/download/{{.TAMAGO_VERSION}}/tamago-{{.TAMAGO_VERSION}}.linux-amd64.tar.gz
+      # Release tag is `tamago-go1.26.4` (upstream renamed from the old `go1.26.4`
+      # scheme ~2026-06); the asset keeps the `tamago-` prefix too. Both the tag
+      # path and the asset name therefore use `tamago-{{.TAMAGO_VERSION}}`.
+      - curl -fsSL -o /tmp/tamago-{{.TAMAGO_VERSION}}.tar.gz https://github.com/usbarmory/tamago-go/releases/download/tamago-{{.TAMAGO_VERSION}}/tamago-{{.TAMAGO_VERSION}}.linux-amd64.tar.gz
       # Tarball uses absolute paths (usr/local/tamago-go/...); strip them so the
       # toolchain lands directly under TAMAGO_ROOT (TAMAGO_ROOT/bin/go).
       - tar -xzf /tmp/tamago-{{.TAMAGO_VERSION}}.tar.gz -C "{{.TAMAGO_ROOT}}" --strip-components=3
