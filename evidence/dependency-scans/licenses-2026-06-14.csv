@@ -1,0 +1,9 @@
+github.com/foxboron/go-uefi,https://github.com/foxboron/go-uefi/blob/d29549a44f29/LICENSE,MIT
+github.com/pkg/errors,https://github.com/pkg/errors/blob/v0.9.1/LICENSE,BSD-2-Clause
+github.com/spf13/afero,https://github.com/spf13/afero/blob/v1.9.3/LICENSE.txt,Apache-2.0
+github.com/u-root/u-root,https://github.com/u-root/u-root/blob/v0.15.0/LICENSE,BSD-3-Clause
+github.com/usbarmory/tamago,https://github.com/usbarmory/tamago/blob/master/LICENSE,BSD-3-Clause
+github.com/walterchris/go-boot,https://github.com/usbarmory/go-boot/blob/master/LICENSE,BSD-3-Clause (fork; see ADR-0008)
+golang.org/x/crypto/cryptobyte,https://cs.opensource.google/go/x/crypto/+/v0.42.0:LICENSE,BSD-3-Clause
+golang.org/x/sys/unix,https://cs.opensource.google/go/x/sys/+/v0.41.0:LICENSE,BSD-3-Clause
+golang.org/x/text,https://cs.opensource.google/go/x/text/+/v0.29.0:LICENSE,BSD-3-Clause
