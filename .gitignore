@@ -31,3 +31,7 @@ test/qemu/ovmf/*_VARS*.fd
 .idea/
 .vscode/
 *.log
+
+# Python bytecode (test/qemu/*.py helpers)
+__pycache__/
+*.pyc
