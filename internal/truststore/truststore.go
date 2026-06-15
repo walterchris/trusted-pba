@@ -13,7 +13,6 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/x509"
-	_ "embed"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -22,9 +21,6 @@ import (
 	"github.com/foxboron/go-uefi/efi/signature"
 	"github.com/walterchris/trusted-pba/internal/imageverify"
 )
-
-//go:embed materials/dbx/dbx-amd64.bin
-var dbxUpdate []byte
 
 // Store is the parsed embedded trust material.
 type Store struct {
@@ -49,7 +45,7 @@ func Load() (*Store, error) {
 		db = append(db, cert)
 	}
 
-	hashes, certs, err := parseDBX(dbxUpdate)
+	hashes, certs, err := parseDBX(dbxUpdateBytes())
 	if err != nil {
 		return nil, fmt.Errorf("truststore: parse dbx: %w", err)
 	}
