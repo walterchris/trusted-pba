@@ -117,7 +117,9 @@ residual risk → tests → risk IDs.
   SourceBuffer), so verified bytes == executed bytes regardless of Secure Boot
   state (R-012, #46); accepting an image whose short-lived signing leaf expired is
   *intentional* (matches firmware — R-013/#48).
-- **Tests:** `TestVerifyFailsClosed/*`, `pba-matrix` (accept/reject),
+- **Tests:** `TestVerifyFailsClosed/*`, `pba-matrix` (accept / unsigned-reject /
+  dbx-revoked-reject — the revoked target is validly signed and chains to db but
+  its signer is in dbx, so it is rejected specifically by revocation; #37),
   `run-negative` (no target → fail closed). → **R-001**.
 
 ### 6.2 Evil-maid attacker (transient physical access)
@@ -303,3 +305,4 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock library + Phase 6 boot w
 | 2026-06-10 | Phase 6 wrap-up (#60 merged; epics #22/#19 closed): staleness refresh only. Status header updated from "through Phase 3" to coverage through Phase 6 (unlock wired + QEMU e2e); TB3 (PBA → SED transport) updated from *planned* to live (Phase 5 transport, Phase 6 e2e, hardware pending Phase 8); §4 Opal response parsing no longer *planned* (shipped + fuzzed in Phase 4). No new threats, no mitigation or risk changes. |
 | 2026-06-11 | go-boot fork `v1.6.2-tpba.4` (audit #11, ADR-0008 Amendment 2026-06-11): §6.6 pin → tpba.4. Added upstream-file edits — `path.go` device-path Length<4 underflow guard (F-L5, a chainload-path panic on a malformed firmware device path) and `error.go` typed status errors (F-S3) — alongside the existing `uefi.s` alignment fix; F-S4 retained (audit false positive: the `dummy:` block is load-bearing for the assembler's PUSH/POP balance). No new threats; firmware remains trusted at the device-path boundary. Review record: `evidence/security-review-records/2026-06-11-go-boot-tpba4-audit-followups.md`. |
 | 2026-06-12 | TB2 clarified single-hop (ADR-0010): Phase 7 loader-wrapper dropped. The PBA validates the one image it chainloads and does not wrap firmware boot services / enforce policy transitively; the next stage brokers its own downstream trust (shim) or relies on firmware-provisioned keys. No new threats; narrows (does not widen) the PBA's claimed trust boundary. |
+| 2026-06-15 | §6.1/R-001 test coverage (#37): added an end-to-end **dbx-by-cert revocation** scenario to `pba-matrix` (a validly-signed, db-chaining target whose signer is in dbx → rejected specifically by revocation; mutation-proven non-vacuous). Test-only + a mechanical trust-store refactor (the embedded dbx source is now build-tag-selected so the `pbatest` build substitutes a crafted test dbx; default/`trustfull` builds keep the full real Microsoft dbx — verified, 431 hashes). No behavior change to real builds, no new threats. |
