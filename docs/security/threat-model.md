@@ -120,7 +120,10 @@ residual risk → tests → risk IDs.
 - **Tests:** `TestVerifyFailsClosed/*`, `pba-matrix` (accept / unsigned-reject /
   dbx-revoked-reject — the revoked target is validly signed and chains to db but
   its signer is in dbx, so it is rejected specifically by revocation; #37),
-  `run-negative` (no target → fail closed). → **R-001**.
+  `secureboot-matrix` scenario **E** (firmware-validation path: the firmware's own
+  Secure Boot engine rejects a db-trusted PBA image because its Authenticode hash
+  is in dbx — revocation overrides trust, dbx > db; non-vacuous vs scenario B and a
+  wrong-hash control; #18), `run-negative` (no target → fail closed). → **R-001**.
 
 ### 6.2 Evil-maid attacker (transient physical access)
 - **Capability:** boots their own media, swaps the ESP, attempts to observe unlock.
@@ -306,3 +309,4 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock library + Phase 6 boot w
 | 2026-06-11 | go-boot fork `v1.6.2-tpba.4` (audit #11, ADR-0008 Amendment 2026-06-11): §6.6 pin → tpba.4. Added upstream-file edits — `path.go` device-path Length<4 underflow guard (F-L5, a chainload-path panic on a malformed firmware device path) and `error.go` typed status errors (F-S3) — alongside the existing `uefi.s` alignment fix; F-S4 retained (audit false positive: the `dummy:` block is load-bearing for the assembler's PUSH/POP balance). No new threats; firmware remains trusted at the device-path boundary. Review record: `evidence/security-review-records/2026-06-11-go-boot-tpba4-audit-followups.md`. |
 | 2026-06-12 | TB2 clarified single-hop (ADR-0010): Phase 7 loader-wrapper dropped. The PBA validates the one image it chainloads and does not wrap firmware boot services / enforce policy transitively; the next stage brokers its own downstream trust (shim) or relies on firmware-provisioned keys. No new threats; narrows (does not widen) the PBA's claimed trust boundary. |
 | 2026-06-15 | §6.1/R-001 test coverage (#37): added an end-to-end **dbx-by-cert revocation** scenario to `pba-matrix` (a validly-signed, db-chaining target whose signer is in dbx → rejected specifically by revocation; mutation-proven non-vacuous). Test-only + a mechanical trust-store refactor (the embedded dbx source is now build-tag-selected so the `pbatest` build substitutes a crafted test dbx; default/`trustfull` builds keep the full real Microsoft dbx — verified, 431 hashes). No behavior change to real builds, no new threats. |
+| 2026-06-16 | §6.1/R-001 test coverage (#18, Secure Boot test matrix epic): added `secureboot-matrix` scenario **E** — the **firmware's own** Secure Boot engine rejects a **db-trusted** PBA image because its Authenticode hash is in **dbx** (revocation overrides trust, **dbx > db**), closing the missing firmware-validation-path revocation case (complementary to #37's PBA-path coverage). Strengthens R-001 and **TB1** (Firmware → PBA); non-vacuous (scenario B boots, E rejected "Access Denied", wrong-hash control boots); digest from the new host helper via the same `go-uefi/authenticode` library `internal/imageverify` uses (one source of truth). Test-only; **no rating change** (residual stays Low), no new threats. Review record: `evidence/security-review-records/2026-06-16-firmware-path-dbx-hash-revocation-18.md`. |
