@@ -32,15 +32,20 @@ gen_test_keys() {
 	done
 }
 
-# enroll_keys <template> <out> <guid> <workdir> — enroll the workdir's PK/KEK/db
-# into a copy of the OVMF VARS template, enforcing. --no-microsoft: only our test
-# keys are trusted (so an MS-signed image would NOT validate). Uses global VFV.
+# enroll_keys <template> <out> <guid> <workdir> [dbx_sha256] — enroll the workdir's
+# PK/KEK/db into a copy of the OVMF VARS template, enforcing. --no-microsoft: only
+# our test keys are trusted (so an MS-signed image would NOT validate). If a
+# dbx_sha256 (hex Authenticode digest) is given, it is added to dbx — so an image
+# the db would otherwise trust is revoked by hash (dbx overrides db). Uses global VFV.
 enroll_keys() {
-	local template="$1" out="$2" guid="$3" work="$4"
+	local template="$1" out="$2" guid="$3" work="$4" dbx_sha256="${5:-}"
+	local dbx=()
+	[ -n "$dbx_sha256" ] && dbx=(--add-dbx-hash "$guid" "$dbx_sha256")
 	"$VFV" --input "$template" --output "$out" \
 		--set-pk "$guid" "$work/PK.crt" \
 		--add-kek "$guid" "$work/KEK.crt" \
 		--add-db "$guid" "$work/db.crt" \
+		"${dbx[@]}" \
 		--no-microsoft --secure-boot >/dev/null
 }
 

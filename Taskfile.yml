@@ -143,7 +143,7 @@ tasks:
         python3 test/qemu/expect-serial.py {{.BIN}}/{{.APP}}.efi
 
   sb-matrix:
-    desc: Secure Boot matrix — SB off / enforcing-signed / enforcing-unsigned-rejected (needs virt-firmware, sbsign, openssl)
+    desc: Secure Boot matrix — SB off / enforcing-signed / enforcing-unsigned-rejected / dbx-hash-revoked (needs virt-firmware, sbsign, openssl, host go)
     cmds:
       - task: build
       - task: testapp

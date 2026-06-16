@@ -215,6 +215,11 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      # Host Go: the matrix computes the PBA's Authenticode hash for the dbx-by-hash
+      # scenario (E) via test/qemu/authenticode-hash (go run, reusing go-uefi).
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - name: Install QEMU, OVMF, mtools, gnu-efi, sbsigntool, openssl/uuid
         run: |
           sudo apt-get update
@@ -227,7 +232,7 @@ jobs:
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Secure Boot matrix (SB off / enforcing-signed / enforcing-unsigned-rejected)
+      - name: Secure Boot matrix (SB off / enforcing-signed / enforcing-unsigned / dbx-hash-revoked)
         run: task sb-matrix
 
   # Phase 6 (#22, replaces the #9 placeholder): the MVP's primary virtual
