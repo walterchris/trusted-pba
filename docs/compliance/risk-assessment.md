@@ -57,7 +57,11 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 - **Residual:** Low (parser-bug risk in `go-uefi`, bounded by pinning + fuzz).
 - **Tests:** `TestVerifyFailsClosed/*`, `TestVerifyAccepts`; `pba-matrix`
   (accept / unsigned-reject / **dbx-revoked-reject** end-to-end in QEMU — #37,
-  mutation-proven).
+  mutation-proven, PBA-validation path); `secureboot-matrix` scenario **E**
+  (firmware-validation path — the firmware's own Secure Boot engine rejects a
+  **db-trusted** PBA image because its Authenticode hash is in **dbx**, proving
+  **dbx > db** / revocation overrides trust; non-vacuous vs scenario B and a
+  wrong-hash control — #18).
 - **Evidence:** ADR-0007; `internal/imageverify/verify.go`.
 
 ### R-002 — PBA unlocks SED before authentication succeeds
@@ -264,3 +268,4 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 | 2026-06-11 | go-boot fork `v1.6.2-tpba.4` (audit #11, ADR-0008 Amendment 2026-06-11): R-006 pin → tpba.4 and wording updated — the fork now carries a few small functional upstream-file edits (added: `path.go` device-path Length<4 underflow guard [F-L5], `error.go` typed status errors [F-L5/F-S3]) alongside the `uefi.s` alignment fix; F-S4 kept (audit false positive — the `dummy:` block is load-bearing for the assembler), F-S5 naming. QEMU mock-Opal matrix passes against the bump; published-tag hash verified. Review record: `evidence/security-review-records/2026-06-11-go-boot-tpba4-audit-followups.md`. |
 | 2026-06-15 | R-001 test coverage (#37): `pba-matrix` gains an end-to-end **dbx-by-cert revocation** scenario (db-chaining, validly-signed target whose signer is revoked → rejected specifically by dbx; mutation-proven). Test-only + a mechanical build-tag refactor of the embedded-dbx source (pbatest substitutes a crafted test dbx; default/`trustfull` keep the full real Microsoft dbx — verified 431). No rating change; closes the revocation-coverage gap noted under R-001/R-011. |
 | 2026-06-10 | Phase 6 wrap-up (#60 merged; epics #22/#19 closed): staleness refresh only. Status header updated from "through Phase 3" to coverage through Phase 6 (Opal unlock no longer in the "not yet built" list). R-008 updated: MBRDone is now exercised end-to-end against the EDK2 mock (`unlock-chainload` + `fail-mbrdone`, #22); status Open → Partial, residual stays Medium — real-drive in-session MBRDone timing remains the Phase 8 item. ADR-0009 Proposed → Accepted (§5.3/§23 human gate satisfied by the Release Owner merging #59). No rating changes. |
+| 2026-06-16 | R-001 test coverage (#18, Secure Boot test matrix epic): `secureboot-matrix` gains scenario **E** — the **firmware's own** Secure Boot engine rejects a **db-trusted** PBA image whose Authenticode hash is in **dbx** (revocation overrides trust, **dbx > db**), closing the previously-missing firmware-validation-path revocation case (complementary to #37's PBA-path dbx coverage). Non-vacuous: scenario **B** (same image, no dbx entry) boots, **E** (its hash in dbx) is rejected ("Access Denied"), a wrong-random-hash **control** boots — so E rejects iff the matching hash is revoked, not from a malformed store; the Authenticode digest is computed by the new host helper via the SAME `go-uefi/authenticode` library `internal/imageverify` uses (one source of truth). Test-only; no product behavior change, no new threats. No rating change (residual stays Low). Review record: `evidence/security-review-records/2026-06-16-firmware-path-dbx-hash-revocation-18.md`. |
