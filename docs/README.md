@@ -36,7 +36,8 @@ Populated as their tickets land; this index links the per-topic docs that now ex
   [0007 policy engine + verification](architecture/adr/ADR-0007-policy-engine-and-verification.md) ·
   [0008 go-boot fork](architecture/adr/ADR-0008-go-boot-fork.md) ·
   [0009 boot-path SED unlock](architecture/adr/ADR-0009-boot-path-sed-unlock.md) ·
-  [0010 single-hop trust broker](architecture/adr/ADR-0010-single-hop-trust-broker.md)
+  [0010 single-hop trust broker](architecture/adr/ADR-0010-single-hop-trust-broker.md) ·
+  [0011 pluggable unlock credential sources](architecture/adr/ADR-0011-pluggable-unlock-credential-sources.md)
 - **Compliance** ([`compliance/`](compliance/)):
   [CRA scope assessment](compliance/cra-scope-assessment.md) ·
   [CRA classification](compliance/cra-classification.md) ·
