@@ -148,7 +148,7 @@ evidence · status · gaps.**
 - **Interpretation:** dependencies are inventoried, pinned, hash-locked, and
   reviewed; the maintained go-boot fork is governed.
 - **Design control:** pinned modules + `go.sum`; the `walterchris/go-boot` fork
-  pinned by tag (`v1.6.2-tpba.4`) + hash with an additive/minimal-edit policy
+  pinned by tag (`v1.6.2-tpba.5`) + hash with an additive/minimal-edit policy
   (ADR-0008); vendored MS materials with recorded SHA-256.
 - **Implementation:** `go.mod`/`go.sum`, ADR-0008, `materials/PROVENANCE.md`.
 - **Test evidence:** published-tag hash verified byte-identical on each fork bump;

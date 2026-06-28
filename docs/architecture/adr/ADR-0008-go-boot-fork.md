@@ -9,7 +9,8 @@ PR. Authored in Phase 5. Amended 2026-06-10: pin bumped to `v1.6.2-tpba.2`
 upstream's `uefi/uefi.s`; see *Amendment 2026-06-10* below — the patch set is no
 longer purely additive). Amended 2026-06-11: pin bumped to `v1.6.2-tpba.4`
 (commit `6db0670`, full-codebase-audit follow-ups; see *Amendment 2026-06-11*
-below).
+below). Amended 2026-06-28: pin bumped to `v1.6.2-tpba.5` (handle-aware Storage
+Security for the first real-hardware bring-up; see *Amendment 2026-06-28* below).
 
 ## Context
 go-boot v1.6.2 wraps only a **fixed set** of UEFI protocols/services (graphics,
@@ -33,7 +34,7 @@ dependency layer (rather than adding `unsafe`/assembly to the product).
   module path is renamed to `github.com/walterchris/go-boot`; the Trusted PBA
   imports it **by that name** (a plain `require`, no `replace` — replace-with-rename
   causes a "module used for two paths" conflict). Pinned by the tag
-  **`v1.6.2-tpba.4`** (upstream v1.6.2 + our patch set; see the Amendments below)
+  **`v1.6.2-tpba.5`** (upstream v1.6.2 + our patch set; see the Amendments below)
   and locked in `go.sum`.
 - **Addition (minimal, additive):** one file `uefi/storagesecurity.go` —
   `GetStorageSecurity()` (locate + resolve `ReceiveData`/`SendData` pointers via the
@@ -124,6 +125,67 @@ typed errors are good upstream-PR candidates alongside the alignment fix.
 which exercises `devicePath`) passes against this tree; the published tag's `go.sum`
 hash was verified byte-identical to the pinned commit.
 
+## Amendment (2026-06-28): `v1.6.2-tpba.5` — handle-aware Storage Security
+
+The **first real-hardware bring-up** (a Swissbit OPAL drive on a 4-NVMe test
+board) hit the limitation this ADR deferred to Phase 8: real firmware exposes one
+`EFI_STORAGE_SECURITY_COMMAND_PROTOCOL` handle **per NVMe drive**, and go-boot's
+`GetStorageSecurity()` (built on `LocateProtocol`) returns the *first* instance —
+on the test board a non-Opal disk that rejects TCG commands with
+`EFI_DEVICE_ERROR`. The fork gains the additive primitives needed to enumerate and
+address handles individually, batched into `v1.6.2-tpba.5`:
+
+1. **`LocateHandleBuffer` boot-services wrapper** + the `EFI_LOCATE_SEARCH_TYPE`
+   constants (`AllHandles`/`ByRegisterNotify`/`ByProtocol`) and a **`FreePool`**
+   wrapper (boot-services slot `0x48`) to release the firmware-allocated handle
+   buffer. These are thin, additive wrappers over go-boot's existing audited
+   `callService` primitive — no new ABI/assembly.
+2. **Handle-aware Storage Security (additive `uefi/storagesecurity.go`):**
+   `LocateStorageSecurityHandles()` (enumerate every SSC carrier handle via
+   `LocateHandleBuffer` by the Storage Security protocol GUID) and
+   `GetStorageSecurityByHandle(h)` (resolve `SendData`/`ReceiveData` for a *named*
+   handle via the existing `decode`), plus the internal `newStorageSecurity` helper
+   they share with the original `GetStorageSecurity()`. The original locate-first
+   call is retained; the new entry points let the **caller** enumerate carriers and
+   pick the Opal SED.
+
+**Rationale:** real systems need handle enumeration to find the SED among multiple
+Storage Security carriers; the transport cannot assume the first instance is the
+SED. Selection itself (Level-0 Discovery probe) is **Opal protocol logic and stays
+out of go-boot** — `internal/transport.NewAll()` returns one transport per handle
+and `cmd/pba selectSED` chooses (see ADR-0009 Amendment 2026-06-28).
+
+**MediaId stays 0 — the earlier "minimal MediaID-only" / `EFI_BLOCK_IO` path is
+DROPPED.** The deferred-to-Phase-8 follow-up that this ADR contemplated ("deriving
+the real MediaId from `EFI_BLOCK_IO`") was disproven on hardware: the SED answers
+Discovery and unlock with **MediaId 0**, so no `BlockIo`/`MediaId` derivation was
+added to the fork. `tpba.5` adds **only** the handle-enumeration surface above.
+
+**Still additive.** `tpba.5` adds new wrappers/files only; it does not add a new
+upstream-file edit beyond the three carried since `tpba.3`/`tpba.4` (`uefi.s`,
+`path.go`, `error.go`). The re-base process (re-apply + re-review the upstream
+diff; upstream the functional edits) now also re-applies the
+`LocateHandleBuffer`/`FreePool` and handle-aware-SSC additive files.
+
+**Security impact update:** the new surface is enumeration + per-handle resolution
+only; it changes *which* carrier the transport talks to, not the unlock security
+model (still Admin1-PIN-authenticated, fail-closed — see ADR-0009 Amendment). A
+handle whose protocol cannot be resolved is skipped (not a usable carrier); zero
+usable carriers fails closed. The pin remains by tag + `go.sum` hash; published-tag
+hash verified. The `tpba.5` bump also pulled new **indirect** deps into `go.sum`
+(the usbarmory stack: `gvisor`, `gliderlabs/ssh`, `arl/statsviz`, `armory-boot`,
+`go-net`, `x/term`/`x/time`/`x/exp`, etc.); these are **not reachable from the
+`tamago && amd64` `trusted-pba.efi` build graph** (build-graph reachability being
+verified separately), and the #27 dependency scan covers the fork's transitive set
+(see `docs/development/dependency-management.md`, R-006).
+
+**Evidence:** the first real-hardware bring-up record
+`evidence/security-review-records/2026-06-28-opal-hw-bringup-handle-select-comid.md`
+(real-drive selection + ComID byte-order root-cause chain; review verdicts); the
+Trusted PBA QEMU mock-Opal matrix still passes against the bump (the EDK2 mock is
+single-handle, so the host-side selection collapses to picking that one); the
+published tag's `go.sum` hash recorded.
+
 ## Alternatives Considered
 - **In-repo `unsafe`+asm UEFI-call primitive** — keeps everything in our tree but
   duplicates go-boot's `callFn` ABI trampoline and puts hand-written assembly in a
@@ -139,9 +201,10 @@ mechanical module-path rename + a few small functional upstream-file edits — t
 `uefi.s` alignment fix, the `path.go` Length guard, and the `error.go` typed
 errors; see Amendments 2026-06-10 and 2026-06-11), so the diff against upstream
 v1.6.2 is small and reviewable; it is **pinned by tag and `go.sum` hash**; and the added code reuses go-boot's existing, audited call machinery
-rather than introducing new ABI code. The transport's MediaId-0 / first-instance
-limitations are documented in `internal/transport` and deferred to Phase 8. A missing protocol fails closed
-(`New` returns an error). No secrets; the fork carries upstream's license.
+rather than introducing new ABI code. As of `v1.6.2-tpba.5` the first-instance
+limitation is resolved (handle enumeration; see Amendment 2026-06-28) and MediaId 0
+is confirmed correct on hardware. A missing protocol / zero usable carriers fails
+closed (`NewAll` returns an error). No secrets; the fork carries upstream's license.
 
 ## Compliance Impact
 The fork must be onboarded under §14 dependency management (#27) and recorded in the
