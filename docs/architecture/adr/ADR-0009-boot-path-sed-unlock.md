@@ -2,7 +2,11 @@
 
 ## Status
 Accepted — §5.3/§23 human gate satisfied by the Release Owner merging the
-Phase 6 wiring PR (#59). Authored in Phase 6 (#22, #51 item 2).
+Phase 6 wiring PR (#59). Authored in Phase 6 (#22, #51 item 2). Amended
+2026-06-28 (**Proposed**): SED device selection among multiple Storage Security
+carriers + ComID byte-swap for the EFI transport, from the first real-hardware
+bring-up — pending the §5.3/§23 human gate (Release Owner merge); see *Amendment
+2026-06-28* below.
 
 ## Context
 Phases 4/5 delivered the fail-closed Opal unlock library (`internal/opal`, with
@@ -40,6 +44,71 @@ deployments or virtual tests that have no Opal device.
   authentication (console prompt / TPM / challenge-response); when the console
   prompt lands, the #51 console-input scrub obligation (zeroizing the input
   buffer the PIN was typed into) attaches to that change.
+
+## Amendment (2026-06-28): SED device selection + ComID byte-swap (hardware bring-up)
+
+**Status: Proposed.** This is the security-relevant decision of the first
+real-hardware bring-up (a Swissbit OPAL drive on a 4-NVMe test board); the §5.3/§23
+human gate is the Release Owner merging this branch. The original Phase 6 flow
+above assumed a single Storage Security carrier (true for the single-device EDK2
+MockOpalDxe); real firmware breaks that assumption two ways. Both are
+correctness/conformance fixes — **neither changes the unlock security model**:
+unlock still requires the Admin1 PIN and fails closed on any error.
+
+1. **SED selection among multiple Storage Security carriers.** A multi-NVMe machine
+   exposes one `EFI_STORAGE_SECURITY_COMMAND_PROTOCOL` handle per drive; most are
+   non-Opal disks that reject TCG commands with `EFI_DEVICE_ERROR`. The transport
+   used the first instance — a non-Opal disk on the test board — so unlock failed
+   before it began. **Decision:** `transport.NewAll()` enumerates every handle
+   (go-boot `v1.6.2-tpba.5`, ADR-0008 Amendment 2026-06-28) and returns one
+   transport per carrier; `cmd/pba selectSED` picks the one whose **Level-0
+   Discovery succeeds** (the Opal SED) and unlocks only that one. Discovery is
+   read-only and PIN-free, so probing the non-SED carriers (which error) touches no
+   credential; the PIN is consumed and zeroized exactly once, on the selected
+   device. Fail-closed is preserved: **no Discovery-responsive SED → hard error,
+   never chainload** (`selectSED` returns "no Opal SED among N storage security
+   device(s)"). Selection (a Discovery probe) is Opal protocol logic and lives in
+   `cmd/pba`/`internal/opal`, **not** in the transport layer (which only enumerates
+   carriers).
+
+   The **earlier "MediaId 0" hypothesis was DISPROVEN** — MediaId 0 is correct; no
+   `EFI_BLOCK_IO`/MediaId derivation was needed or added (see ADR-0008 Amendment
+   2026-06-28).
+
+2. **ComID byte-order for the EFI transport.** EDK2 firmware places the
+   `SecurityProtocolSpecificData` UINT16 onto the SECURITY PROTOCOL command in the
+   **opposite byte order** to TCG's on-wire ComID, so Level-0 Discovery (ComID
+   `0x0001`) returned a zero-filled buffer until passed as `0x0100`. **Decision:**
+   `transport.UEFI.swapComID` byte-swaps every ComID on `Send`/`Recv`; the EDK2
+   MockOpalDxe mirrors it (swaps back); the host MockTPer bypasses this transport
+   entirely and is unaffected. This is a transport-layer conformance detail, not a
+   security-model change.
+
+**Accepted residual (multi-SED targeting).** Selecting a *specific* drive among
+**multiple Opal SEDs** is a future refinement. Today the boot path takes the
+**first Discovery-responsive SED**. If that is the wrong SED for the policy's PIN,
+authentication simply fails → fail closed (the drive stays locked, no chainload);
+it never unlocks the wrong drive silently. Naming/pinning the intended SED (by
+serial, device path, or policy) is tracked for a later phase. No rating change.
+
+The code comments in `cmd/pba/sedunlock.go` (`selectSED`) and
+`internal/transport/uefi_tamago.go` (`NewAll`/`swapComID`) cite ADR-0009/ADR-0008;
+this amendment and the ADR-0008 Amendment 2026-06-28 cover what they cite.
+
+**Test impact (this amendment).** Host unit tests added (`cmd/pba`,
+`c962b12`): `TestUnlockSEDSelectsResponsiveSED` (selectSED skips a carrier that
+fails Discovery and authenticates the responsive SED; the PIN is spent on the
+selected device, the dead carrier left locked) and
+`TestUnlockSEDNoResponsiveSEDFailsClosed` (no responsive carrier → hard error,
+nothing unlocked, PIN still consumed). `TestUnlockSEDFailsClosedWithoutCarrier` and
+the host `transport` fail-closed test move from `New` to `NewAll`. The QEMU
+MockOpalDxe matrix (single handle) still passes — selection collapses to the one
+carrier, and the mock's `MOCK_COMID` swap proves the byte-order round-trip.
+
+**Real-hardware status.** Unlock now reaches `StartSession` on the real drive; the
+remaining session-setup conformance gap (Properties exchange / Authenticate) is
+tracked separately. **Production still replaces the compiled-in MVP PIN with real
+authentication** (unchanged from the original Decision).
 
 ## Alternatives Considered
 - **Always require unlock** — breaks every non-SED deployment and all existing

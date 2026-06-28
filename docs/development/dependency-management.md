@@ -45,7 +45,7 @@ committed CycloneDX SBOM.
   tampered/changed artifact. (Added after the 2026-06-14 break, where upstream
   re-tagged its releases and an unverified download 404'd; see #9.)
 - **go-boot fork:** `github.com/walterchris/go-boot`, pinned by tag
-  (`v1.6.2-tpba.4`) + `go.sum`. Governance, the minimal-edit-over-upstream policy,
+  (`v1.6.2-tpba.5`) + `go.sum`. Governance, the minimal-edit-over-upstream policy,
   the re-base process, and the upstream-submission commitment are in **ADR-0008**.
   On every fork bump the published tag's `go.sum` hash is verified byte-identical
   to the reviewed fork commit.
@@ -101,3 +101,20 @@ Verified (`go list -deps ./cmd/pba` under `GOOS=tamago`): only the go-boot
 u-root `bzimage` (via go-boot) are compiled into the product — matching the §1
 inventory. The remaining `go.sum` modules are transitive build/test dependencies
 not linked into `trusted-pba.efi`.
+
+### go-boot `v1.6.2-tpba.5` indirect-dep growth (2026-06-28)
+
+The `v1.6.2-tpba.4` → `v1.6.2-tpba.5` bump (ADR-0008 Amendment 2026-06-28;
+handle-aware Storage Security) pulled new **indirect** modules into `go.mod`/`go.sum`
+— the usbarmory networking/runtime stack the fork now references: `gvisor.dev/gvisor`,
+`github.com/gliderlabs/ssh`, `github.com/anmitsu/go-shlex`, `github.com/arl/statsviz`,
+`github.com/gorilla/websocket`, `github.com/hako/durafmt`, `github.com/google/btree`,
+`github.com/usbarmory/armory-boot`, `github.com/usbarmory/go-net`, and
+`golang.org/x/{term,time,exp}` (plus `crypto/x509roots/fallback`). These are
+**indirect** (`// indirect` in `go.mod`) and **not reachable from the
+`tamago && amd64` `trusted-pba.efi` build graph** — the pruned `go list -deps
+./cmd/pba` graph above is unchanged (build-graph reachability is being verified
+separately). They are present in `go.sum` only because they appear in the fork
+module's transitive requirement set; the #27 dependency scan covers the fork's full
+transitive set, so any advisory in these modules is still surfaced even though they
+are not linked into the product. See R-006.
