@@ -10,6 +10,7 @@ import (
 
 	"github.com/walterchris/trusted-pba/internal/opal"
 	"github.com/walterchris/trusted-pba/internal/policy"
+	"github.com/walterchris/trusted-pba/internal/transport"
 )
 
 // banner prefixes every console/serial line the PBA emits.
@@ -47,6 +48,9 @@ func unlockSED(pol *policy.Policy, newTransports func() ([]opal.Transport, error
 	// TEMPORARY (#79) HW bring-up diagnostics — remove before merge.
 	opal.Debugf = func(format string, args ...any) {
 		_, _ = fmt.Fprintf(w, "%s: opal-dbg: "+format+"\r\n", append([]any{banner}, args...)...)
+	}
+	transport.Debugf = func(format string, args ...any) {
+		_, _ = fmt.Fprintf(w, "%s: xport-dbg: "+format+"\r\n", append([]any{banner}, args...)...)
 	}
 
 	pin := []byte(pol.SEDPIN)
