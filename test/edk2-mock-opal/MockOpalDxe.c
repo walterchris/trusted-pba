@@ -44,6 +44,12 @@
 #define MOCK_COMID_SESSION    0x07FE  // canonical base ComID
 #define MOCK_TSN              0x1000  // TPer session number once authenticated
 
+// Real firmware places SecurityProtocolSpecificData onto the SECURITY PROTOCOL
+// command in the opposite byte order to the TCG ComID, so the transport pre-swaps
+// it (see internal/transport/uefi_tamago.go swapComID). The mock swaps back to
+// recover the logical ComID, faithfully emulating the firmware+drive.
+#define MOCK_COMID(spsp)  ((UINT16)(((spsp) << 8) | ((spsp) >> 8)))
+
 // ComPacket/Packet/SubPacket framing (TCG Core Spec §3.3; sed-opal layout).
 #define COMPACKET_HDR_LEN  20
 #define PACKET_HDR_LEN     24
@@ -686,7 +692,7 @@ MockSendData (
   UINTN        PayloadLen;
 
   if (SecurityProtocolId != MOCK_PROTO_SECURITY ||
-      SecurityProtocolSpecificData != MOCK_COMID_SESSION)
+      MOCK_COMID (SecurityProtocolSpecificData) != MOCK_COMID_SESSION)
   {
     return EFI_DEVICE_ERROR;
   }
@@ -736,7 +742,7 @@ MockReceiveData (
     return EFI_DEVICE_ERROR;
   }
 
-  if (SecurityProtocolSpecificData == MOCK_COMID_DISCOVERY) {
+  if (MOCK_COMID (SecurityProtocolSpecificData) == MOCK_COMID_DISCOVERY) {
     // Golden fixture bytes (test/fixtures/opal/discovery0-locked.bin), with
     // the Locking-feature flags byte patched from live state. In the initial
     // locked state the patch is the identity, so the response is byte-exact.
@@ -757,7 +763,7 @@ MockReceiveData (
     return EFI_SUCCESS;
   }
 
-  if (SecurityProtocolSpecificData != MOCK_COMID_SESSION) {
+  if (MOCK_COMID (SecurityProtocolSpecificData) != MOCK_COMID_SESSION) {
     return EFI_DEVICE_ERROR;
   }
 

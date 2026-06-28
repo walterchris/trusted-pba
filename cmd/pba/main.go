@@ -100,7 +100,7 @@ func run(pol *policy.Policy, enforcing bool) error {
 	if err := pol.CheckSecureBoot(enforcing); err != nil {
 		return fmt.Errorf("policy: %w", err)
 	}
-	if err := unlockSED(pol, newUEFITransport, out); err != nil {
+	if err := unlockSED(pol, newUEFITransports, out); err != nil {
 		return err
 	}
 	entry, err := pol.Select()
@@ -111,15 +111,19 @@ func run(pol *policy.Policy, enforcing bool) error {
 	return chainload(entry)
 }
 
-// newUEFITransport adapts transport.New to the opal.Transport constructor shape
-// unlockSED takes. It fails closed when the firmware exposes no Storage Security
-// device.
-func newUEFITransport() (opal.Transport, error) {
-	t, err := transport.New()
+// newUEFITransports adapts transport.NewAll to the constructor shape unlockSED
+// takes: one opal.Transport per Storage Security device (the caller selects the
+// Opal SED). It fails closed when the firmware exposes no Storage Security device.
+func newUEFITransports() ([]opal.Transport, error) {
+	ts, err := transport.NewAll()
 	if err != nil {
 		return nil, err
 	}
-	return t, nil
+	out := make([]opal.Transport, len(ts))
+	for i, t := range ts {
+		out[i] = t
+	}
+	return out, nil
 }
 
 // chainload dispatches on the entry's validation mode. All error returns are

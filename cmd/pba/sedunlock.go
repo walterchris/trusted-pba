@@ -36,7 +36,7 @@ const banner = "TRUSTED-PBA"
 //
 // Errors never carry the PIN or session material (enforced for the opal layer
 // by its log-scrub test); only the failing stage is reported.
-func unlockSED(pol *policy.Policy, newTransport func() (opal.Transport, error), w io.Writer) error {
+func unlockSED(pol *policy.Policy, newTransports func() ([]opal.Transport, error), w io.Writer) error {
 	if pol.SEDUnlock == policy.SEDUnlockNone {
 		// Console write errors are not actionable pre-boot; the decision itself
 		// is what matters.
@@ -48,13 +48,37 @@ func unlockSED(pol *policy.Policy, newTransport func() (opal.Transport, error), 
 	pol.SEDPIN = nil // pol must not remain a holder of the credential
 	defer clear(pin)
 
-	t, err := newTransport()
+	transports, err := newTransports()
 	if err != nil {
 		return fmt.Errorf("sed unlock failed: transport: %w", err)
 	}
-	if err := opal.NewClient(t).Unlock(opal.AuthorityAdmin1, pin); err != nil {
+
+	// A multi-NVMe machine exposes one Storage Security carrier per drive; only the
+	// Opal SED answers Level-0 Discovery (the others fail with a device error). Pick
+	// it before authenticating — Unlock consumes and zeroizes the PIN, so it can run
+	// on exactly one transport. (Targeting a specific drive among several SEDs is a
+	// future refinement — ADR-0009.)
+	client, err := selectSED(transports)
+	if err != nil {
+		return fmt.Errorf("sed unlock failed: %w", err)
+	}
+	if err := client.Unlock(opal.AuthorityAdmin1, pin); err != nil {
 		return fmt.Errorf("sed unlock failed: %w", err)
 	}
 	_, _ = fmt.Fprintf(w, "%s: sed unlock ok\r\n", banner)
 	return nil
+}
+
+// selectSED returns a client for the first transport whose Level-0 Discovery
+// succeeds — the Opal SED among the Storage Security carriers — and fails closed
+// when none responds. Discovery is read-only and touches no credential, so probing
+// the non-SED carriers (which error) is harmless.
+func selectSED(transports []opal.Transport) (*opal.Client, error) {
+	for _, t := range transports {
+		c := opal.NewClient(t)
+		if _, err := c.Discover(); err == nil {
+			return c, nil
+		}
+	}
+	return nil, fmt.Errorf("no Opal SED among %d storage security device(s)", len(transports))
 }

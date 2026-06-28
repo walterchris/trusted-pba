@@ -20,13 +20,13 @@ func requiredPolicy(pin string) *policy.Policy {
 	return &policy.Policy{SEDUnlock: policy.SEDUnlockRequired, SEDPIN: policy.PIN(pin)}
 }
 
-// mockConstructor returns a transport constructor serving the given MockTPer and
-// a counter of how often it was invoked.
-func mockConstructor(m *opal.MockTPer) (func() (opal.Transport, error), *int) {
+// mockConstructor returns a transports constructor serving the given MockTPer (as
+// the sole Storage Security device) and a counter of how often it was invoked.
+func mockConstructor(m *opal.MockTPer) (func() ([]opal.Transport, error), *int) {
 	calls := 0
-	return func() (opal.Transport, error) {
+	return func() ([]opal.Transport, error) {
 		calls++
-		return m, nil
+		return []opal.Transport{m}, nil
 	}, &calls
 }
 
@@ -35,7 +35,7 @@ func TestUnlockSEDNoneSkipsLoudly(t *testing.T) {
 	var buf bytes.Buffer
 	pol := &policy.Policy{SEDUnlock: policy.SEDUnlockNone}
 
-	construct := func() (opal.Transport, error) {
+	construct := func() ([]opal.Transport, error) {
 		t.Fatal("sed_unlock none must not construct a transport")
 		return nil, nil
 	}
@@ -161,7 +161,10 @@ func TestUnlockSEDFailsClosedWithoutCarrier(t *testing.T) {
 	pol := requiredPolicy(testPIN)
 	pinBacking := []byte(pol.SEDPIN)
 
-	construct := func() (opal.Transport, error) { return transport.New() }
+	construct := func() ([]opal.Transport, error) {
+		_, err := transport.NewAll()
+		return nil, err
+	}
 	err := unlockSED(pol, construct, &buf)
 	if !errors.Is(err, transport.ErrUnavailable) {
 		t.Fatalf("want transport.ErrUnavailable, got %v", err)
