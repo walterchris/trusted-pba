@@ -12,8 +12,8 @@ var ErrUnavailable = errors.New("transport: UEFI storage security unavailable of
 // assertion holds on the host.
 type UEFI struct{}
 
-// New always fails on the host (no firmware).
-func New() (*UEFI, error) { return nil, ErrUnavailable }
+// NewAll always fails on the host (no firmware).
+func NewAll() ([]*UEFI, error) { return nil, ErrUnavailable }
 
 // Send always fails on the host.
 func (u *UEFI) Send(_ uint8, _ uint16, _ []byte) error { return ErrUnavailable }
