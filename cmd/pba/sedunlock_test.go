@@ -175,6 +175,65 @@ func TestUnlockSEDFailsClosedWithoutCarrier(t *testing.T) {
 	assertPINConsumed(t, pol, pinBacking)
 }
 
+// TestUnlockSEDSelectsResponsiveSED proves selectSED skips a Storage Security
+// carrier that does not answer Level-0 Discovery (a non-Opal NVMe drive on a
+// multi-drive machine) and authenticates the one that does — and that the PIN is
+// spent on the selected SED, not the dead carrier.
+func TestUnlockSEDSelectsResponsiveSED(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	dead := opal.NewMockTPer([]byte(testPIN))
+	dead.Inject(opal.FaultTimeout) // Discovery fails -> must be skipped
+	sed := opal.NewMockTPer([]byte(testPIN))
+	pol := requiredPolicy(testPIN)
+	pinBacking := []byte(pol.SEDPIN)
+
+	construct := func() ([]opal.Transport, error) { return []opal.Transport{dead, sed}, nil }
+	if err := unlockSED(pol, construct, &buf); err != nil {
+		t.Fatalf("unlockSED: %v", err)
+	}
+	if sed.Locked() || !sed.MBRDone() {
+		t.Errorf("selected SED not unlocked: locked=%v mbrDone=%v", sed.Locked(), sed.MBRDone())
+	}
+	if !dead.Locked() {
+		t.Error("non-responsive carrier must be left untouched (locked)")
+	}
+	if !strings.Contains(buf.String(), "TRUSTED-PBA: sed unlock ok") {
+		t.Errorf("missing success marker; output: %q", buf.String())
+	}
+	assertPINConsumed(t, pol, pinBacking)
+}
+
+// TestUnlockSEDNoResponsiveSEDFailsClosed proves the fail-closed selection path:
+// when no carrier answers Discovery (none is an Opal SED), unlockSED returns a
+// hard error, unlocks nothing, and still consumes the PIN.
+func TestUnlockSEDNoResponsiveSEDFailsClosed(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	d1 := opal.NewMockTPer([]byte(testPIN))
+	d1.Inject(opal.FaultTimeout)
+	d2 := opal.NewMockTPer([]byte(testPIN))
+	d2.Inject(opal.FaultTimeout)
+	pol := requiredPolicy(testPIN)
+	pinBacking := []byte(pol.SEDPIN)
+
+	construct := func() ([]opal.Transport, error) { return []opal.Transport{d1, d2}, nil }
+	err := unlockSED(pol, construct, &buf)
+	if err == nil {
+		t.Fatal("want error when no carrier is an Opal SED, got nil")
+	}
+	if !strings.Contains(err.Error(), "sed unlock failed") || !strings.Contains(err.Error(), "no Opal SED") {
+		t.Errorf("error %q must carry the stage marker and name the no-SED condition", err)
+	}
+	if d1.MBRDone() || d2.MBRDone() || !d1.Locked() || !d2.Locked() {
+		t.Error("no carrier may be unlocked when none is an SED")
+	}
+	if strings.Contains(buf.String(), "sed unlock ok") {
+		t.Errorf("must not emit success marker; output: %q", buf.String())
+	}
+	assertPINConsumed(t, pol, pinBacking)
+}
+
 // assertPINConsumed asserts the wiring's PIN contract: the policy no longer
 // holds the credential and the original backing bytes are zeroized — on success
 // and on every failure path.

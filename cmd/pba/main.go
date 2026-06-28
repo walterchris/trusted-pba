@@ -119,6 +119,8 @@ func newUEFITransports() ([]opal.Transport, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Widen []*transport.UEFI to []opal.Transport (Go has no covariant slice
+	// conversion, so the element-wise loop is unavoidable).
 	out := make([]opal.Transport, len(ts))
 	for i, t := range ts {
 		out[i] = t

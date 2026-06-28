@@ -76,6 +76,10 @@ func unlockSED(pol *policy.Policy, newTransports func() ([]opal.Transport, error
 func selectSED(transports []opal.Transport) (*opal.Client, error) {
 	for _, t := range transports {
 		c := opal.NewClient(t)
+		// Discovery is read-only and PIN-free; it both identifies the SED and is
+		// re-run inside Unlock (which needs the fresh Discovery for the locking
+		// state). The extra probe round-trip is intentional — do not "optimize" it
+		// away by caching, or selection and unlock could diverge.
 		if _, err := c.Discover(); err == nil {
 			return c, nil
 		}
