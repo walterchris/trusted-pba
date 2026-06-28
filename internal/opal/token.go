@@ -62,6 +62,15 @@ func (b *builder) bytes(d []byte) { b.atom(d, true) }
 // uid appends an 8-byte UID as a byte-string atom.
 func (b *builder) uid(u UID) { b.atom(u[:], true) }
 
+// namedUint appends a Named value pair with a string Name (TCG Core uses string
+// names for the Communication Properties): StartName Bytes(name) uint EndName.
+func (b *builder) namedUint(name string, v uint64) {
+	b.control(tokStartName)
+	b.bytes([]byte(name))
+	b.uint(v)
+	b.control(tokEndName)
+}
+
 // atom appends a (non-tiny) simple atom. isBytes selects byte-string vs integer;
 // both are unsigned (sign bit clear).
 func (b *builder) atom(d []byte, isBytes bool) {

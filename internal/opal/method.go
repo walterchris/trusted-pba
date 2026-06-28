@@ -17,6 +17,10 @@ const (
 // status. Callers must fail closed.
 var ErrMethod = errors.New("opal: method failed")
 
+// ErrNotAuthorized is returned when the Authenticate method completes with a
+// "false" result — the credential was rejected. Callers must fail closed.
+var ErrNotAuthorized = errors.New("opal: not authorized")
+
 // buildMethod assembles a TCG method invocation:
 //
 //	Call <invoker> <method> StartList <args> EndList EndOfData StartList 0 0 0 EndList
@@ -43,8 +47,11 @@ func buildMethod(invoker, method UID, args func(b *builder)) []byte {
 	return b.buf
 }
 
-// startSessionCmd builds StartSession on the Session Manager, authenticating with
-// pin as the given authority against spID (the SP to open).
+// startSessionCmd builds StartSession on the Session Manager opening spID. With a
+// non-empty pin it authenticates in-session (HostChallenge + HostSigningAuthority);
+// with an empty pin it opens an anonymous session, which the caller then elevates
+// with Authenticate (authenticateCmd) — the path real drives that reject
+// credential-in-StartSession (method status INVALID_PARAMETER) require.
 func startSessionCmd(hsn uint32, spID UID, auth UID, pin []byte) []byte {
 	return buildMethod(uidSMUID, uidMethodStartSession, func(b *builder) {
 		startSessionArgs(b, hsn, spID, auth, pin)
@@ -60,6 +67,9 @@ func startSessionArgs(b *builder, hsn uint32, spID, auth UID, pin []byte) {
 	b.uint(uint64(hsn)) // HostSessionID
 	b.uid(spID)         // SPID
 	b.uint(1)           // Write = TRUE
+	if len(pin) == 0 {
+		return // anonymous session: no HostChallenge/HostSigningAuthority
+	}
 	// HostChallenge (name 0) + HostSigningAuthority (name 3).
 	b.control(tokStartName)
 	b.uint(0)
@@ -69,6 +79,20 @@ func startSessionArgs(b *builder, hsn uint32, spID, auth UID, pin []byte) {
 	b.uint(3)
 	b.uid(auth)
 	b.control(tokEndName)
+}
+
+// authenticateCmd builds the Authenticate method invoked on ThisSP within an open
+// session: it elevates the session to the given authority using proof (the PIN) as
+// the Challenge (optional parameter 0). Used after an anonymous StartSession.
+func authenticateCmd(auth UID, proof []byte) []byte {
+	return buildMethod(uidThisSP, uidMethodAuthenticate, func(b *builder) {
+		startSessionReserve(b, len(proof))
+		b.uid(auth) // authority to authenticate as
+		b.control(tokStartName)
+		b.uint(0) // Challenge
+		b.bytes(proof)
+		b.control(tokEndName)
+	})
 }
 
 // startSessionReserve grows b so the remaining StartSession appends cannot
@@ -101,6 +125,47 @@ func setCmd(invoker UID, cols ...column) []byte {
 		b.control(tokEndList)
 		b.control(tokEndName)
 	})
+}
+
+// propertiesCmd builds the Communication Properties method (Properties on the
+// Session Manager) advertising the host's ComPacket/token limits. TCG Core encodes
+// the HostProperties optional parameter (name 0) as a list of string-named uints.
+// The advertised limits are conservative and consistent with recvBufSize
+// (MaxComPacketSize). The basic (non-extended) set is sent, matching how the
+// reference go-tcg-storage opens these drives (WithoutExtendedProperties).
+func propertiesCmd() []byte {
+	return buildMethod(uidSMUID, uidMethodProperties, func(b *builder) {
+		b.control(tokStartName)
+		b.uint(0) // HostProperties (optional parameter 0)
+		b.control(tokStartList)
+		b.namedUint("MaxMethods", 1)
+		b.namedUint("MaxSubpackets", 1)
+		b.namedUint("MaxPacketSize", recvBufSize-20)
+		b.namedUint("MaxPackets", 1)
+		b.namedUint("MaxComPacketSize", recvBufSize)
+		b.namedUint("MaxIndTokenSize", recvBufSize-20-24-12)
+		b.control(tokEndList)
+		b.control(tokEndName)
+	})
+}
+
+// methodResultBool reports the first integer of a method's result (the value
+// before EndOfData) as a boolean — e.g. the Authenticate success flag. A missing
+// result value is an error (fail closed).
+func methodResultBool(payload []byte) (bool, error) {
+	toks, err := tokenize(payload)
+	if err != nil {
+		return false, err
+	}
+	for _, tk := range toks {
+		if tk.isControl(tokEndOfData) {
+			break
+		}
+		if tk.isInt {
+			return tk.u != 0, nil
+		}
+	}
+	return false, fmt.Errorf("%w: no result value", ErrMethod)
 }
 
 // methodStatus extracts the status code from a method-result token stream: the

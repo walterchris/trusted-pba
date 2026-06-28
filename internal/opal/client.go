@@ -1,6 +1,9 @@
 package opal
 
-import "fmt"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 // Transport is the abstract TCG transport (the plan's TCGTransport): it carries
 // raw IF-SEND / IF-RECV payloads to the drive, independent of UEFI. Implementations
@@ -21,10 +24,16 @@ type Transport interface {
 
 // Security protocol IDs and the fixed Level 0 Discovery ComID.
 const (
-	protoSecurity  = 0x01   // SECURITY PROTOCOL 1 (TCG)
-	comIDDiscovery = 0x0001 // Level 0 Discovery
-	recvBufSize    = 2048   // IF-RECV transfer length
+	protoSecurity   = 0x01   // SECURITY PROTOCOL 1 (TCG)
+	protoComIDMgmt  = 0x02   // SECURITY PROTOCOL 2 (TCG ComID management)
+	comIDDiscovery  = 0x0001 // Level 0 Discovery
+	recvBufSize     = 2048   // IF-RECV transfer length
+	comIDMgmtBufLen = 512    // ComID-management request/response buffer
 )
+
+// comIDRequestStackReset is the ComID-management request code that resets the
+// synchronous protocol stack for a ComID (TCG Storage Core).
+var comIDRequestStackReset = [4]byte{0x00, 0x00, 0x00, 0x02}
 
 // Locking and MBRControl table column numbers (Opal SSC).
 const (
@@ -83,14 +92,31 @@ func (c *Client) Unlock(auth Authority, pin []byte) error {
 		return fmt.Errorf("opal: drive does not support locking")
 	}
 
+	// Bring the ComID to a known state before opening a session, mirroring the
+	// TCG control-session setup: reset the synchronous protocol stack, then
+	// negotiate Communication Properties. Real TPers reject StartSession
+	// (INVALID_PARAMETER) without this; the mock TPers accept it too.
+	if err := c.stackReset(); err != nil {
+		return err
+	}
+	if err := c.properties(); err != nil {
+		return err
+	}
+
 	authUID, ok := auth.uid()
 	if !ok {
 		return fmt.Errorf("opal: unknown authority %d", auth)
 	}
-	if err := c.startSession(uidLockingSP, authUID, pin); err != nil {
+	// Open an anonymous session, then elevate it with Authenticate. This drive
+	// rejects the credential supplied inside StartSession (INVALID_PARAMETER), so
+	// the credential is presented via the Authenticate method instead.
+	if err := c.startSession(uidLockingSP, authUID, nil); err != nil {
 		return err
 	}
 	defer c.endSession()
+	if err := c.authenticate(authUID, pin); err != nil {
+		return err
+	}
 
 	if err := c.set(uidGlobalRange, column{colReadLocked, 0}, column{colWriteLocked, 0}); err != nil {
 		return fmt.Errorf("opal: unlock global range: %w", err)
@@ -105,7 +131,10 @@ func (c *Client) Unlock(auth Authority, pin []byte) error {
 
 // startSession opens an authenticated session on spID and stores the session IDs.
 func (c *Client) startSession(spID, auth UID, pin []byte) error {
-	const hsn = 1
+	// A multi-byte Host Session Number: real drives reject a 1-byte tiny-atom HSN
+	// (e.g. 1) with INVALID_PARAMETER. The PBA opens a single session per boot, so a
+	// fixed value is fine (no collision concern).
+	const hsn = 0x12345678
 	resp, err := c.transact(0, 0, startSessionCmd(hsn, spID, auth, pin))
 	if err != nil {
 		return fmt.Errorf("opal: start session: %w", err)
@@ -132,6 +161,71 @@ func (c *Client) set(invoker UID, cols ...column) error {
 	resp, err := c.transact(c.tsn, c.hsn, setCmd(invoker, cols...))
 	if err != nil {
 		return err
+	}
+	return checkStatus(resp)
+}
+
+// stackReset resets the synchronous protocol stack for the ComID via a TCG ComID
+// management request (security protocol 0x02), as the TCG control-session setup
+// does before opening a session. The request carries the (extended) ComID and the
+// stack-reset code; the response's success word (offset 12, big-endian) must be 0.
+func (c *Client) stackReset() error {
+	buf := make([]byte, comIDMgmtBufLen)
+	binary.BigEndian.PutUint16(buf[0:2], c.comID)
+	// buf[2:4] (extended ComID high bits) stays 0 for a 16-bit base ComID.
+	copy(buf[4:8], comIDRequestStackReset[:])
+
+	if err := c.t.Send(protoComIDMgmt, c.comID, buf); err != nil {
+		return fmt.Errorf("opal: stack reset send: %w", err)
+	}
+	res, err := c.t.Recv(protoComIDMgmt, c.comID, comIDMgmtBufLen)
+	if err != nil {
+		return fmt.Errorf("opal: stack reset recv: %w", err)
+	}
+	// Response layout: [10:12] = payload size (BE), [12:] = payload; the stack-reset
+	// payload's first word is the success code (0 = success).
+	if len(res) < 16 {
+		return fmt.Errorf("opal: stack reset: short response (%d bytes)", len(res))
+	}
+	if size := binary.BigEndian.Uint16(res[10:12]); size < 4 {
+		return fmt.Errorf("opal: stack reset: pending or empty response (size %d)", size)
+	}
+	if binary.BigEndian.Uint32(res[12:16]) != 0 {
+		return fmt.Errorf("opal: stack reset: TPer reported failure")
+	}
+	return nil
+}
+
+// authenticate elevates the open session to auth, presenting pin as the Challenge
+// (the Authenticate method on ThisSP). It fails closed: a method error, a
+// non-success status, or a false authenticate result is an authentication failure.
+// The error never carries pin or session material.
+func (c *Client) authenticate(auth UID, pin []byte) error {
+	resp, err := c.transact(c.tsn, c.hsn, authenticateCmd(auth, pin))
+	if err != nil {
+		return fmt.Errorf("opal: authenticate: %w", err)
+	}
+	if err := checkStatus(resp); err != nil {
+		return fmt.Errorf("opal: authenticate: %w", err)
+	}
+	ok, err := methodResultBool(resp)
+	if err != nil {
+		return fmt.Errorf("opal: authenticate: %w", err)
+	}
+	if !ok {
+		return fmt.Errorf("opal: authenticate: %w", ErrNotAuthorized)
+	}
+	return nil
+}
+
+// properties runs the Communication Properties exchange on the control session
+// (TSN 0, HSN 0): the host advertises its ComPacket/token limits to the TPer. Only
+// the method status is checked — the host keeps its conservative recvBufSize, so the
+// TPer's returned limits need not be parsed.
+func (c *Client) properties() error {
+	resp, err := c.transact(0, 0, propertiesCmd())
+	if err != nil {
+		return fmt.Errorf("opal: properties: %w", err)
 	}
 	return checkStatus(resp)
 }
