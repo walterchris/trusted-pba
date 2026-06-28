@@ -46,9 +46,25 @@ TPM-backed sources and is the main cost driver.
    type Source interface {
        // Resolve returns the raw Admin1 PIN bytes or fails closed. The caller
        // consumes and zeroizes the result; a Source performs no fallback.
-       Resolve(ctx Context) ([]byte, error)
+       // env exposes the platform capabilities a Source may need (prompt the
+       // user, talk to a token, reach the network, read the TPM) without the
+       // unlock path knowing how — so interactive and round-trip (challenge-
+       // response) flows live entirely inside Resolve and stay host-mockable.
+       Resolve(env Env) ([]byte, error)
    }
+
+   // Env is the capability bundle; any field may be absent on a given platform:
+   //   Console (text in/out) · TPM (TCG2) · USB (HID/CCID) · Net · FS/Block
+   //   · DriveInfo (serial, for derivation)
    ```
+   **Multi-factor is composition, not a new abstraction.** An MFA method is just
+   a `Source` whose `Resolve` calls sub-`Source`s — e.g. `sealed{ blob: tpm,
+   auth: console }` (a console PIN unseals a TPM blob), `challengeResponse{
+   token: yubikey, challenge: console }` (the PIN is the challenge, the token's
+   HMAC is the key), or `combine{ kdf, sources: [...] }` (derive the key from
+   several contributions — Shamir/XOR/KDF). The interface never changes; this is
+   what keeps "add authentication ways as we like" true without reopening the
+   contract.
 2. **Policy selects the source and its config**, replacing the bare `sed_pin`
    field. `sed_unlock` (required/none) from ADR-0009 is unchanged; required now
    carries a credential block, e.g.:
@@ -62,17 +78,55 @@ TPM-backed sources and is the main cost driver.
    (`PBKDF2-HMAC-SHA1(seed, salt = drive serial padded to 20, 75000, 32B)` —
    interoperable with sedutil/lumentum-provisioned drives)}. Any source composes
    with either convention.
-4. **Initial source menu**, sequenced by TamaGo feasibility:
+4. **Source menu, grouped by factor and graded by pre-boot feasibility.** The
+   hard filter is the runtime: we run pre-`ExitBootServices`, so we get whatever
+   the firmware exposes as a protocol (keyboard text-input, filesystem, network,
+   TPM via TCG2) cheaply, but anything needing *raw USB device protocols* (CCID,
+   FIDO/CTAP) we must implement ourselves — which splits the options sharply.
+
+   *Something you know*
    | Source | Effort | Prereq |
    |---|---|---|
-   | `policy-pin` (debug only) | done | — |
-   | `keyfile` | low | ESP/FS access (already present) |
-   | `console` | moderate | UEFI `SimpleTextInput` |
+   | `console` (keyboard passphrase) | low | UEFI `SimpleTextInput` (firmware drives the keyboard) |
+
+   *Something you have*
+   | Source | Effort | Prereq |
+   |---|---|---|
+   | `keyfile` (USB stick / GUID-tagged partition) | low | FS/Block (already present) |
+   | `yubikey-typed` (static password / typed OTP) | low | none — the key acts as a USB **keyboard**, captured by `console` |
+   | `yubikey-hmac` (HMAC-SHA1 challenge-response) | high | raw USB HID stack; PIN = challenge, token HMAC = key (offline, know+have) |
+   | `fido2-hmac-secret` (CTAP2) | high | USB HID + CTAP stack |
+   | `smartcard-piv` (CCID) | high | CCID USB stack; card decrypts a sealed key blob |
+
+   *Platform-bound / measured*
+   | Source | Effort | Prereq |
+   |---|---|---|
    | `tpm-nvram` (read-once) | high | TamaGo TPM transport |
    | `tpm-pcr-sealed` | highest | TPM transport + policy sessions / `TPM2_Unseal` |
-   Implement easy→hard: `keyfile` + `console` unblock real-world use without the
-   TPM stack; `tpm-nvram` and `tpm-pcr-sealed` follow the TPM transport
-   building block (its own ADR/epic).
+
+   *Network-bound (NBDE)*
+   | Source | Effort | Prereq |
+   |---|---|---|
+   | `tang-clevis` (network-bound) | medium | UEFI network stack; key released only on a trusted network |
+   | `kms-tls` (key server) | medium | network stack + TLS; optionally attestation-gated |
+
+   *Debug only*
+   | Source | Effort | Prereq |
+   |---|---|---|
+   | `policy-pin` (compiled-in) | done | — (release-gated, see §5) |
+
+   Biometrics are out of scope (not viable pre-boot). MFA combinations
+   (`sealed`, `challengeResponse`, `combine`) are expressed by composition (§1),
+   not as new menu entries.
+
+   **Implement easy→hard:** `console` + `keyfile` + `yubikey-typed` unblock
+   real-world use today (no new building block); the rest gate on three
+   building blocks, each its own ADR/spike — a **TamaGo TPM transport**
+   (`tpm-*`), a **USB HID/CCID stack** (`yubikey-hmac`/`fido2`/`smartcard`), and a
+   **network stack** (NBDE). Note that `yubikey-typed` is essentially the
+   `console` source — the token types the secret — so YubiKey support is not one
+   feature but a cheap mode and an expensive (challenge-response) mode that
+   shares the USB-stack cost with smartcards and FIDO2.
 5. **Non-negotiable invariants for every source:**
    - **Fail closed.** Any failure to resolve — TPM absent, PCR mismatch, keyfile
      missing, wrong/empty PIN — aborts to the policy `on_error` action; never
@@ -86,8 +140,16 @@ TPM-backed sources and is the main cost driver.
      gated behind a build tag (as `sedtest` already is) and rejected by
      `check-release-policy` in release builds.
    - **Secret hygiene unchanged.** The resolved PIN is consumed and zeroized
-     exactly once (ADR-0009); `console` additionally inherits the #51
-     input-buffer scrub obligation.
+     exactly once (ADR-0009); `console` and any other interactive/token source
+     inherit the #51 input-buffer scrub obligation.
+   - **Bounded interactivity.** Interactive sources cap retries (e.g. 3 attempts)
+     then fail closed — never an unbounded prompt loop or brute-force oracle (the
+     drive's own try-limit and the TPM dictionary-attack lockout backstop this).
+   - **Recovery is not a backdoor.** Tokens get lost; any recovery/escrow path is
+     itself an enrolled `Source` under all rules above, never a bypass of the gate.
+   - **Each new source is a unit of review.** Adding one requires its own
+     threat-model entry and negative tests — different factors carry different
+     residual risk and attack surface.
 
 ## Alternatives Considered
 - **Keep the single compiled-in PIN.** Cannot reach production (ADR-0009 already
@@ -136,11 +198,17 @@ builds.
   a sedutil-provisioned drive's expected credential).
 - **Release-gate test**: a release build with `source: policy-pin` must fail
   `check-release-policy`.
-- **Virtual**: `keyfile` and `console` are testable in the QEMU/MockOpalDxe
-  matrix (extend the Phase 6 unlock→MBRDone→chainload flow). `tpm-*` need either
-  a virtual TPM (swtpm) in QEMU or land as hardware-only (FirmwareCI, #24) with a
-  documented mock equivalent per CLAUDE.md.
-- **Negative security cases** for each source are mandatory (CLAUDE.md).
+- **Virtual**: `keyfile`, `console`, and `yubikey-typed` (a typed-keyboard
+  source) are testable in the QEMU/MockOpalDxe matrix (extend the Phase 6
+  unlock→MBRDone→chainload flow). `tpm-*` need a virtual TPM (swtpm) in QEMU or
+  land hardware-only (FirmwareCI, #24); the USB-token sources (`yubikey-hmac`,
+  `fido2`, `smartcard`) and NBDE sources (`tang-clevis`, `kms-tls`) are
+  exercised against an emulated token / a test Tang/KMS endpoint, or hardware,
+  each with a documented mock equivalent per CLAUDE.md.
+- **Composition**: an MFA `Source` is tested as a unit (sub-sources mocked) plus
+  end-to-end for at least one real combination (e.g. `sealed{tpm, console}`).
+- **Negative security cases** for each source are mandatory (CLAUDE.md),
+  including the bounded-retry cap and the no-silent-downgrade invariant.
 
 ## Rollback Plan
 The abstraction is additive. To reverse: collapse `Source` back to the single
