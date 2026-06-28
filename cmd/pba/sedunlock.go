@@ -44,6 +44,11 @@ func unlockSED(pol *policy.Policy, newTransports func() ([]opal.Transport, error
 		return nil
 	}
 
+	// TEMPORARY (#79) HW bring-up diagnostics — remove before merge.
+	opal.Debugf = func(format string, args ...any) {
+		_, _ = fmt.Fprintf(w, "%s: opal-dbg: "+format+"\r\n", append([]any{banner}, args...)...)
+	}
+
 	pin := []byte(pol.SEDPIN)
 	pol.SEDPIN = nil // pol must not remain a holder of the credential
 	defer clear(pin)

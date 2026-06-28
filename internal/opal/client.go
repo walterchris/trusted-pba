@@ -53,12 +53,24 @@ type Client struct {
 // NewClient returns a client over t.
 func NewClient(t Transport) *Client { return &Client{t: t} }
 
+// Debugf, when non-nil, receives transport/session diagnostics. TEMPORARY
+// hardware bring-up aid (#79) — must be removed before merge. It never receives
+// PIN or session-credential material.
+var Debugf func(format string, args ...any)
+
+func dbg(format string, args ...any) {
+	if Debugf != nil {
+		Debugf(format, args...)
+	}
+}
+
 // Discover performs Level 0 Discovery and records the session ComID.
 func (c *Client) Discover() (*Discovery, error) {
 	raw, err := c.t.Recv(protoSecurity, comIDDiscovery, recvBufSize)
 	if err != nil {
 		return nil, fmt.Errorf("opal: discovery recv: %w", err)
 	}
+	dbg("discovery raw[:96]: % x", raw[:min(96, len(raw))])
 	d, err := parseDiscovery(raw)
 	if err != nil {
 		return nil, err
@@ -92,6 +104,20 @@ func (c *Client) Unlock(auth Authority, pin []byte) error {
 		return fmt.Errorf("opal: drive does not support locking")
 	}
 
+	// Prefer a dynamically allocated ComID over the static base ComID from
+	// discovery. A real TPer can reject StartSession (INVALID_PARAMETER) on the
+	// shared/static base ComID when that ComID's TPer-side protocol state is stale
+	// (TCG Core §5.2.2.4.1); a freshly allocated ComID has a clean stack. Mirrors
+	// go-tcg-storage FindComID, which overrides the base ComID with GetComID's.
+	// Best effort: if the drive does not hand out a dynamic ComID, keep the base.
+	dbg("base comID=0x%04x", c.comID)
+	comID, gErr := c.getComID()
+	dbg("getComID -> 0x%04x err=%v", comID, gErr)
+	if gErr == nil && comID != 0 {
+		c.comID = comID
+	}
+	dbg("using comID=0x%04x", c.comID)
+
 	// Bring the ComID to a known state before opening a session, mirroring the
 	// TCG control-session setup: reset the synchronous protocol stack, then
 	// negotiate Communication Properties. Real TPers reject StartSession
@@ -99,9 +125,11 @@ func (c *Client) Unlock(auth Authority, pin []byte) error {
 	if err := c.stackReset(); err != nil {
 		return err
 	}
+	dbg("stackReset ok")
 	if err := c.properties(); err != nil {
 		return err
 	}
+	dbg("properties ok")
 
 	authUID, ok := auth.uid()
 	if !ok {
@@ -139,6 +167,7 @@ func (c *Client) startSession(spID, auth UID, pin []byte) error {
 	if err != nil {
 		return fmt.Errorf("opal: start session: %w", err)
 	}
+	dbg("startSession resp (%d bytes): % x", len(resp), resp)
 	gotHSN, tsn, err := syncSessionIDs(resp)
 	if err != nil {
 		return fmt.Errorf("opal: start session: %w", err)
@@ -163,6 +192,23 @@ func (c *Client) set(invoker UID, cols ...column) error {
 		return err
 	}
 	return checkStatus(resp)
+}
+
+// getComID requests a dynamically allocated ComID from the TPer (TCG "GET COMID":
+// an IF-RECV on the ComID-management protocol with ComID 0). The response carries
+// the assigned base ComID at bytes [0:2] (big-endian) and its extended part at
+// [2:4]; the PBA uses 16-bit base ComIDs, so only [0:2] is taken. Mirrors
+// go-tcg-storage GetComID.
+func (c *Client) getComID() (uint16, error) {
+	res, err := c.t.Recv(protoComIDMgmt, 0, comIDMgmtBufLen)
+	if err != nil {
+		return 0, fmt.Errorf("opal: get comID: %w", err)
+	}
+	dbg("getComID raw[:16]: % x", res[:min(16, len(res))])
+	if len(res) < 2 {
+		return 0, fmt.Errorf("opal: get comID: short response (%d bytes)", len(res))
+	}
+	return binary.BigEndian.Uint16(res[0:2]), nil
 }
 
 // stackReset resets the synchronous protocol stack for the ComID via a TCG ComID
