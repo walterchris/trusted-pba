@@ -69,20 +69,29 @@ func unlockSED(pol *policy.Policy, newTransports func() ([]opal.Transport, error
 	return nil
 }
 
-// selectSED returns a client for the first transport whose Level-0 Discovery
-// succeeds — the Opal SED among the Storage Security carriers — and fails closed
-// when none responds. Discovery is read-only and touches no credential, so probing
-// the non-SED carriers (which error) is harmless.
+// selectSED returns a client for the locked Opal SED among the Storage Security
+// carriers — a drive reporting Opal SSC + locking-supported that is Locked with an
+// active Shadow MBR — and fails closed when none matches. Discovery is read-only and
+// touches no credential, so probing the non-target carriers (which error) is harmless.
 func selectSED(transports []opal.Transport) (*opal.Client, error) {
+	// A machine can expose several Opal-capable NVMe drives (e.g. a blank SSD that
+	// also answers Level-0 Discovery). The SED to unlock is the one that is locked
+	// with an active Shadow MBR — the drive the PBA was booted from. Selecting the
+	// first drive that merely answers Discovery is wrong (it can be a blank Opal disk).
+	//
+	// INTERIM (#81): this locked + Shadow-MBR heuristic is a stopgap — it also skips
+	// an already-unlocked target. The rework ties selection to a specific drive
+	// identity (boot device, or an NVMe serial/WWN from policy/config); see #81.
+	// Discovery is read-only and PIN-free; it is re-run inside Unlock.
 	for _, t := range transports {
 		c := opal.NewClient(t)
-		// Discovery is read-only and PIN-free; it both identifies the SED and is
-		// re-run inside Unlock (which needs the fresh Discovery for the locking
-		// state). The extra probe round-trip is intentional — do not "optimize" it
-		// away by caching, or selection and unlock could diverge.
-		if _, err := c.Discover(); err == nil {
+		d, err := c.Discover()
+		if err != nil || !d.OpalSSC || !d.LockingSupported {
+			continue
+		}
+		if d.Locked && d.MBREnabled {
 			return c, nil
 		}
 	}
-	return nil, fmt.Errorf("no Opal SED among %d storage security device(s)", len(transports))
+	return nil, fmt.Errorf("no locked Opal SED among %d storage security device(s)", len(transports))
 }
