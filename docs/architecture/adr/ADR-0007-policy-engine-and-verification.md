@@ -130,7 +130,7 @@ needs the deferred QEMU virtual-SED device model (`test-tooling-plan.md §3.7`),
 the current EDK2 mock is a protocol mock that does not gate a real backing disk.
 Separately, having the PBA *itself* authorize Windows Boot Manager (a SHIM-style
 Security-protocol override, rather than firmware `db`) is **not** a substitute — it
-diverges PCR 7 and breaks BitLocker's default seal; see ADR-0011.
+diverges PCR 7 and breaks BitLocker's default seal; see ADR-0012.
 
 ## Rollback Plan
 Revert the policy wiring in `cmd/pba/main.go`; the PBA falls back to the Phase 1/2

@@ -1,4 +1,4 @@
-# ADR-0011: SHIM-style Security-protocol override for a full trust broker — spike, scoped away from the measured-boot/Windows path
+# ADR-0012: SHIM-style Security-protocol override for a full trust broker — spike, scoped away from the measured-boot/Windows path
 
 ## Status
 Proposed (spike). This ADR **reconsiders and refines** ADR-0010's rejection of
