@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Windows-handoff (A') test for Trusted PBA — the firmware-db path for a real
-# Microsoft-signed second stage (e.g. Windows Boot Manager). See ADR-0011 / ADR-0007.
+# Microsoft-signed second stage (e.g. Windows Boot Manager). See ADR-0012 / ADR-0007.
 #
 # The PBA is built `-tags winhandoff,trustfull`: a pba-validation policy targeting
 # the staged loader (EFI/TEST/TESTAPP.EFI) + the real full trust set (Microsoft CAs).
@@ -11,13 +11,13 @@
 #      embedded trust store (the trust-broker check);
 #   3. firmware re-validates the SourceBuffer against the Microsoft CA in db on load.
 # All three must pass for the loader to launch — and because firmware db (not a
-# Security-protocol override) authorizes it, PCR 7 / BitLocker stay intact (ADR-0011).
+# Security-protocol override) authorizes it, PCR 7 / BitLocker stay intact (ADR-0012).
 #
 # Scenarios:
 #   POS: our keys + Microsoft in db          -> PBA verifies AND firmware loads it
 #   NEG: our keys ONLY in db (--no-microsoft) -> PBA still verifies, but firmware
 #        rejects the MS-signed buffer on load (proves the PBA's verdict alone is not
-#        sufficient under enforcing Secure Boot — the mechanism ADR-0011 documents).
+#        sufficient under enforcing Secure Boot — the mechanism ADR-0012 documents).
 #
 #   win-handoff.sh <pba-winhandoff.efi>
 #
