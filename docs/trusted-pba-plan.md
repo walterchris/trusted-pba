@@ -359,9 +359,10 @@ QEMU/OVMF. 4. Add serial logging. 5. Chainload a simple test EFI app. 6. Add Sec
 Boot signing + OVMF variable store. 7. Add Secure Boot test matrix. 8. Add PBA
 policy engine. 9. Add native Go Opal mock transport. 10. Add Opal
 session/discovery/unlock logic. 11. Add UEFI Storage Security transport. 12. Add
-MockOpalDxe driver. 13. Run full virtual unlock+chainload. 14. Add shim-like
-LoadImage/StartImage wrapper. 15. Add hardware test plan. 16. Bring up first real
-SED. 17. Add hardware CI. 18. Consider QEMU virtual SED model only after
+MockOpalDxe driver. 13. Run full virtual unlock+chainload. 14. ~~Add shim-like
+LoadImage/StartImage wrapper~~ — **dropped (ADR-0010)**; the PBA is a single-hop trust
+broker and does not wrap firmware boot services. 15. Add hardware test plan. 16. Bring
+up first real SED. 17. Add hardware CI. 18. Consider QEMU virtual SED model only after
 architecture is proven.
 
 ## 16. Implementation Rules (for agents)

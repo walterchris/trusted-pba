@@ -78,8 +78,11 @@ package and `imageverify`'s `Now`/`ErrNoTime` were removed accordingly).
 ### Scope boundary
 Under *enforcing* Secure Boot the firmware already validates images, so the `pba`
 path is an **additional** gate (it can reject more, not make firmware accept more).
-Loading a PBA-only-trusted image that firmware would reject requires the shim-like
-LoadImage wrapper — that is **Phase 7**, not Phase 3.
+Making firmware *accept* a PBA-only-trusted image it would otherwise reject is out of
+scope here: the shim-like `LoadImage` wrapper (former Phase 7) was **dropped**
+(ADR-0010, single-hop trust broker), and a SHIM-style Security-protocol override for
+that narrow case is a **spike, not production** (ADR-0012, scoped away from the
+Windows/BitLocker path).
 
 ## Alternatives Considered
 - **Hash allowlist only** (no signature verification) — simpler, but cannot validate
