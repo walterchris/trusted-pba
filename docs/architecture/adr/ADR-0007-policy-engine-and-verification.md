@@ -118,11 +118,19 @@ CI job): a genuine Microsoft-signed **shim** (Ubuntu `shim-signed`, not committe
 accepted by the full trust set and rejected by the windows-only default — proving the
 embedded CAs validate a real third-party image and the trust-set boundary holds.
 
-**Coverage gap — real Windows boot:** we do not boot a real Windows Boot Manager
-(`bootmgfw.efi`) — it is proprietary (cannot commit/redistribute) and needs a full
-licensed Windows disk + BCD to reach the OS. The shim test covers "verify a real
-Microsoft-signed loader"; booting actual Windows is a manual/hardware validation
-step. Tracked alongside the test-tooling plan.
+**Coverage gap — real Windows boot:** the constraint is redistribution, not use.
+We cannot *commit* `bootmgfw.efi` (proprietary), but a Windows **Evaluation** image
+is freely downloadable, so a real Microsoft-signed loader can be fetched at CI time
+and staged (see the QEMU **Windows-handoff (A′)** scenario, which does exactly this
+with a real Microsoft-signed loader against the full trust set + MS CA in `db`). Two
+things remain genuinely out of automated scope: (1) booting *all the way into
+Windows* needs a full licensed disk + BCD — heavy, and deferred to hardware/manual;
+(2) a *faithful SED reveal* (locked disk hides the real ESP; MBRDone reveals it)
+needs the deferred QEMU virtual-SED device model (`test-tooling-plan.md §3.7`), since
+the current EDK2 mock is a protocol mock that does not gate a real backing disk.
+Separately, having the PBA *itself* authorize Windows Boot Manager (a SHIM-style
+Security-protocol override, rather than firmware `db`) is **not** a substitute — it
+diverges PCR 7 and breaks BitLocker's default seal; see ADR-0011.
 
 ## Rollback Plan
 Revert the policy wiring in `cmd/pba/main.go`; the PBA falls back to the Phase 1/2
