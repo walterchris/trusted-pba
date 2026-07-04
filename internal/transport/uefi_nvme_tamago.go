@@ -10,11 +10,9 @@ import (
 )
 
 // NVMeUEFI carries Opal IF-SEND/IF-RECV over the firmware
-// EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL as raw NVMe Security Send/Receive admin
-// commands. This bypasses EFI_STORAGE_SECURITY_COMMAND_PROTOCOL, which on the
-// target firmware mediates the TCG ComID and refuses host StartSession (#79).
-// Unlike the Storage Security carrier, the ComID needs no byte swap: the NVMe
-// command Dword is built here in NVMe's native order.
+// EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL as raw NVMe Security Send (0x81) / Receive
+// (0x82) admin commands — the same path the OS NVMe driver uses. The ComID is
+// placed in the NVMe command Dword in native order (no byte swap).
 type NVMeUEFI struct {
 	pt nvmePassThru
 }
@@ -28,31 +26,13 @@ type nvmePassThru interface {
 
 // NewAllNVMe locates every EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL handle (one per NVMe
 // controller) and returns a transport over each. It fails closed if the protocol
-// is absent. As with the Storage Security carriers, picking the Opal SED among
-// several controllers is the caller's job (a Level-0 Discovery probe).
-//
-// Before resolving the carriers it resets each NVMe controller (#79): the firmware
-// leaves the SED's TCG stack in its POST-time state, in which Level-0 Discovery
-// reports a stale base ComID and StartSession is rejected (method status 0x0c).
-// Re-binding the firmware NVMe driver re-runs controller initialisation (the CC.EN
-// disable/enable the OS driver also performs), which resets the TCG stack to its
-// base ComID so a session can be opened — mirroring why the OS path works.
+// is absent. A machine can expose several Opal-capable NVMe drives, so picking the
+// SED to unlock among them is the caller's job (selectSED probes Level-0 Discovery
+// and chooses the locked SED).
 func NewAllNVMe() ([]*NVMeUEFI, error) {
 	handles, err := x64.UEFI.Boot.LocateNVMePassThruHandles()
 	if err != nil {
 		return nil, fmt.Errorf("transport: locate nvme passthru handles: %w", err)
-	}
-
-	// Reset each controller, then re-locate: DisconnectController uninstalls the
-	// PassThru protocol, so the pre-reset handles are stale afterwards. Best effort
-	// — a controller that will not reset still fails closed at StartSession.
-	dbg("NVMe controllers: %d", len(handles))
-	for _, h := range handles {
-		resetNVMeController(h)
-	}
-	handles, err = x64.UEFI.Boot.LocateNVMePassThruHandles()
-	if err != nil {
-		return nil, fmt.Errorf("transport: re-locate nvme passthru handles after reset: %w", err)
 	}
 
 	ts := make([]*NVMeUEFI, 0, len(handles))
@@ -67,15 +47,6 @@ func NewAllNVMe() ([]*NVMeUEFI, error) {
 		return nil, errors.New("transport: no usable nvme passthru device found")
 	}
 	return ts, nil
-}
-
-// resetNVMeController re-initialises one NVMe controller by unbinding then
-// rebinding its firmware driver (DisconnectController + recursive
-// ConnectController), which re-runs the controller's CC.EN reset sequence.
-func resetNVMeController(handle uint64) {
-	dErr := x64.UEFI.Boot.DisconnectController(handle, 0, 0)
-	cErr := x64.UEFI.Boot.ConnectController(handle, 0, 0, true)
-	dbg("reset controller %#x: disconnect=%v connect=%v", handle, dErr, cErr)
 }
 
 // Send issues an IF-SEND (NVMe Security Send) for the given security protocol and

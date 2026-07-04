@@ -1,9 +1,6 @@
 package opal
 
-import (
-	"encoding/binary"
-	"fmt"
-)
+import "fmt"
 
 // Transport is the abstract TCG transport (the plan's TCGTransport): it carries
 // raw IF-SEND / IF-RECV payloads to the drive, independent of UEFI. Implementations
@@ -24,16 +21,10 @@ type Transport interface {
 
 // Security protocol IDs and the fixed Level 0 Discovery ComID.
 const (
-	protoSecurity   = 0x01   // SECURITY PROTOCOL 1 (TCG)
-	protoComIDMgmt  = 0x02   // SECURITY PROTOCOL 2 (TCG ComID management)
-	comIDDiscovery  = 0x0001 // Level 0 Discovery
-	recvBufSize     = 2048   // IF-RECV transfer length
-	comIDMgmtBufLen = 512    // ComID-management request/response buffer
+	protoSecurity  = 0x01   // SECURITY PROTOCOL 1 (TCG)
+	comIDDiscovery = 0x0001 // Level 0 Discovery
+	recvBufSize    = 2048   // IF-RECV transfer length
 )
-
-// comIDRequestStackReset is the ComID-management request code that resets the
-// synchronous protocol stack for a ComID (TCG Storage Core).
-var comIDRequestStackReset = [4]byte{0x00, 0x00, 0x00, 0x02}
 
 // Locking and MBRControl table column numbers (Opal SSC).
 const (
@@ -53,24 +44,12 @@ type Client struct {
 // NewClient returns a client over t.
 func NewClient(t Transport) *Client { return &Client{t: t} }
 
-// Debugf, when non-nil, receives transport/session diagnostics. TEMPORARY
-// hardware bring-up aid (#79) — must be removed before merge. It never receives
-// PIN or session-credential material.
-var Debugf func(format string, args ...any)
-
-func dbg(format string, args ...any) {
-	if Debugf != nil {
-		Debugf(format, args...)
-	}
-}
-
 // Discover performs Level 0 Discovery and records the session ComID.
 func (c *Client) Discover() (*Discovery, error) {
 	raw, err := c.t.Recv(protoSecurity, comIDDiscovery, recvBufSize)
 	if err != nil {
 		return nil, fmt.Errorf("opal: discovery recv: %w", err)
 	}
-	dbg("discovery raw[:96]: % x", raw[:min(96, len(raw))])
 	d, err := parseDiscovery(raw)
 	if err != nil {
 		return nil, err
@@ -104,47 +83,14 @@ func (c *Client) Unlock(auth Authority, pin []byte) error {
 		return fmt.Errorf("opal: drive does not support locking")
 	}
 
-	// Prefer a dynamically allocated ComID over the static base ComID from
-	// discovery. A real TPer can reject StartSession (INVALID_PARAMETER) on the
-	// shared/static base ComID when that ComID's TPer-side protocol state is stale
-	// (TCG Core §5.2.2.4.1); a freshly allocated ComID has a clean stack. Mirrors
-	// go-tcg-storage FindComID, which overrides the base ComID with GetComID's.
-	// Best effort: if the drive does not hand out a dynamic ComID, keep the base.
-	dbg("base comID=0x%04x", c.comID)
-	comID, gErr := c.getComID()
-	dbg("getComID -> 0x%04x err=%v", comID, gErr)
-	if gErr == nil && comID != 0 {
-		c.comID = comID
-	}
-	dbg("using comID=0x%04x", c.comID)
-
-	// Bring the ComID to a known state before opening a session, mirroring the
-	// TCG control-session setup: reset the synchronous protocol stack, then
-	// negotiate Communication Properties. Real TPers reject StartSession
-	// (INVALID_PARAMETER) without this; the mock TPers accept it too.
-	if err := c.stackReset(); err != nil {
-		return err
-	}
-	dbg("stackReset ok")
-	if err := c.properties(); err != nil {
-		return err
-	}
-	dbg("properties ok")
-
 	authUID, ok := auth.uid()
 	if !ok {
 		return fmt.Errorf("opal: unknown authority %d", auth)
 	}
-	// Open an anonymous session, then elevate it with Authenticate. This drive
-	// rejects the credential supplied inside StartSession (INVALID_PARAMETER), so
-	// the credential is presented via the Authenticate method instead.
-	if err := c.startSession(uidLockingSP, authUID, nil); err != nil {
+	if err := c.startSession(uidLockingSP, authUID, pin); err != nil {
 		return err
 	}
 	defer c.endSession()
-	if err := c.authenticate(authUID, pin); err != nil {
-		return err
-	}
 
 	if err := c.set(uidGlobalRange, column{colReadLocked, 0}, column{colWriteLocked, 0}); err != nil {
 		return fmt.Errorf("opal: unlock global range: %w", err)
@@ -159,15 +105,11 @@ func (c *Client) Unlock(auth Authority, pin []byte) error {
 
 // startSession opens an authenticated session on spID and stores the session IDs.
 func (c *Client) startSession(spID, auth UID, pin []byte) error {
-	// A multi-byte Host Session Number: real drives reject a 1-byte tiny-atom HSN
-	// (e.g. 1) with INVALID_PARAMETER. The PBA opens a single session per boot, so a
-	// fixed value is fine (no collision concern).
-	const hsn = 0x12345678
+	const hsn = 1
 	resp, err := c.transact(0, 0, startSessionCmd(hsn, spID, auth, pin))
 	if err != nil {
 		return fmt.Errorf("opal: start session: %w", err)
 	}
-	dbg("startSession resp (%d bytes): % x", len(resp), resp)
 	gotHSN, tsn, err := syncSessionIDs(resp)
 	if err != nil {
 		return fmt.Errorf("opal: start session: %w", err)
@@ -190,88 +132,6 @@ func (c *Client) set(invoker UID, cols ...column) error {
 	resp, err := c.transact(c.tsn, c.hsn, setCmd(invoker, cols...))
 	if err != nil {
 		return err
-	}
-	return checkStatus(resp)
-}
-
-// getComID requests a dynamically allocated ComID from the TPer (TCG "GET COMID":
-// an IF-RECV on the ComID-management protocol with ComID 0). The response carries
-// the assigned base ComID at bytes [0:2] (big-endian) and its extended part at
-// [2:4]; the PBA uses 16-bit base ComIDs, so only [0:2] is taken. Mirrors
-// go-tcg-storage GetComID.
-func (c *Client) getComID() (uint16, error) {
-	res, err := c.t.Recv(protoComIDMgmt, 0, comIDMgmtBufLen)
-	if err != nil {
-		return 0, fmt.Errorf("opal: get comID: %w", err)
-	}
-	dbg("getComID raw[:16]: % x", res[:min(16, len(res))])
-	if len(res) < 2 {
-		return 0, fmt.Errorf("opal: get comID: short response (%d bytes)", len(res))
-	}
-	return binary.BigEndian.Uint16(res[0:2]), nil
-}
-
-// stackReset resets the synchronous protocol stack for the ComID via a TCG ComID
-// management request (security protocol 0x02), as the TCG control-session setup
-// does before opening a session. The request carries the (extended) ComID and the
-// stack-reset code; the response's success word (offset 12, big-endian) must be 0.
-func (c *Client) stackReset() error {
-	buf := make([]byte, comIDMgmtBufLen)
-	binary.BigEndian.PutUint16(buf[0:2], c.comID)
-	// buf[2:4] (extended ComID high bits) stays 0 for a 16-bit base ComID.
-	copy(buf[4:8], comIDRequestStackReset[:])
-
-	if err := c.t.Send(protoComIDMgmt, c.comID, buf); err != nil {
-		return fmt.Errorf("opal: stack reset send: %w", err)
-	}
-	res, err := c.t.Recv(protoComIDMgmt, c.comID, comIDMgmtBufLen)
-	if err != nil {
-		return fmt.Errorf("opal: stack reset recv: %w", err)
-	}
-	// Response layout: [10:12] = payload size (BE), [12:] = payload; the stack-reset
-	// payload's first word is the success code (0 = success).
-	if len(res) < 16 {
-		return fmt.Errorf("opal: stack reset: short response (%d bytes)", len(res))
-	}
-	if size := binary.BigEndian.Uint16(res[10:12]); size < 4 {
-		return fmt.Errorf("opal: stack reset: pending or empty response (size %d)", size)
-	}
-	if binary.BigEndian.Uint32(res[12:16]) != 0 {
-		return fmt.Errorf("opal: stack reset: TPer reported failure")
-	}
-	return nil
-}
-
-// authenticate elevates the open session to auth, presenting pin as the Challenge
-// (the Authenticate method on ThisSP). It fails closed: a method error, a
-// non-success status, or a false authenticate result is an authentication failure.
-// The error never carries pin or session material.
-func (c *Client) authenticate(auth UID, pin []byte) error {
-	resp, err := c.transact(c.tsn, c.hsn, authenticateCmd(auth, pin))
-	if err != nil {
-		return fmt.Errorf("opal: authenticate: %w", err)
-	}
-	if err := checkStatus(resp); err != nil {
-		return fmt.Errorf("opal: authenticate: %w", err)
-	}
-	ok, err := methodResultBool(resp)
-	if err != nil {
-		return fmt.Errorf("opal: authenticate: %w", err)
-	}
-	if !ok {
-		return fmt.Errorf("opal: authenticate: %w", ErrNotAuthorized)
-	}
-	return nil
-}
-
-// properties runs the Communication Properties exchange on the control session
-// (TSN 0, HSN 0): the host advertises its ComPacket/token limits to the TPer. Only
-// the method status is checked — the host keeps its conservative recvBufSize, so the
-// TPer's returned limits need not be parsed.
-func (c *Client) properties() error {
-	resp, err := c.transact(0, 0, propertiesCmd())
-	if err != nil {
-		return fmt.Errorf("opal: properties: %w", err)
 	}
 	return checkStatus(resp)
 }

@@ -72,6 +72,14 @@ func NewMockTPer(pin []byte) *MockTPer {
 // Inject sets a transport fault (FaultNone clears it).
 func (m *MockTPer) Inject(f Fault) { m.fault = f }
 
+// SetLockState configures the Discovery lock flags (test helper). A drive that
+// reports locked=false models a non-target Opal drive (e.g. a blank SSD) that
+// selectSED must skip in favour of the locked SED.
+func (m *MockTPer) SetLockState(locked, mbrEnabled bool) {
+	m.locked = locked
+	m.mbrEnabled = mbrEnabled
+}
+
 // Locked reports the current global-range lock state.
 func (m *MockTPer) Locked() bool { return m.locked }
 

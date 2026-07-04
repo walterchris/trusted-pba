@@ -115,11 +115,11 @@ func run(pol *policy.Policy, enforcing bool) error {
 // takes: one opal.Transport per Storage Security device (the caller selects the
 // Opal SED). It fails closed when the firmware exposes no Storage Security device.
 func newUEFITransports() ([]opal.Transport, error) {
-	ts, err := transport.NewAllNVMe() // #79: NVMe PassThru carrier (Storage Security is firmware-mediated)
+	ts, err := transport.NewAll() // #79 item 2: Storage Security carrier (firmware-mediated)
 	if err != nil {
 		return nil, err
 	}
-	// Widen []*transport.NVMeUEFI to []opal.Transport (Go has no covariant slice
+	// Widen []*transport.UEFI to []opal.Transport (Go has no covariant slice
 	// conversion, so the element-wise loop is unavoidable).
 	out := make([]opal.Transport, len(ts))
 	for i, t := range ts {
