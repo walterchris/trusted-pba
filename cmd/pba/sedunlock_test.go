@@ -222,7 +222,7 @@ func TestUnlockSEDNoResponsiveSEDFailsClosed(t *testing.T) {
 	if err == nil {
 		t.Fatal("want error when no carrier is an Opal SED, got nil")
 	}
-	if !strings.Contains(err.Error(), "sed unlock failed") || !strings.Contains(err.Error(), "no Opal SED") {
+	if !strings.Contains(err.Error(), "sed unlock failed") || !strings.Contains(err.Error(), "no locked Opal SED") {
 		t.Errorf("error %q must carry the stage marker and name the no-SED condition", err)
 	}
 	if d1.MBRDone() || d2.MBRDone() || !d1.Locked() || !d2.Locked() {
@@ -230,6 +230,36 @@ func TestUnlockSEDNoResponsiveSEDFailsClosed(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "sed unlock ok") {
 		t.Errorf("must not emit success marker; output: %q", buf.String())
+	}
+	assertPINConsumed(t, pol, pinBacking)
+}
+
+// TestUnlockSEDSkipsNonTargetOpalDrive is the regression test for the wrong-drive
+// bug (#79): a machine can expose several Opal-capable NVMe drives. selectSED must
+// skip a non-locked Opal drive (e.g. a blank SSD) and unlock the locked SED — not
+// just grab the first drive that answers Discovery.
+func TestUnlockSEDSkipsNonTargetOpalDrive(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	decoy := opal.NewMockTPer([]byte(testPIN)) // Opal-capable but not locked (blank SSD)
+	decoy.SetLockState(false, false)
+	sed := opal.NewMockTPer([]byte(testPIN)) // the locked SED (default lock state)
+	pol := requiredPolicy(testPIN)
+	pinBacking := []byte(pol.SEDPIN)
+
+	// decoy is enumerated first — the old "first Opal responder" logic picked it.
+	construct := func() ([]opal.Transport, error) { return []opal.Transport{decoy, sed}, nil }
+	if err := unlockSED(pol, construct, &buf); err != nil {
+		t.Fatalf("unlockSED: %v", err)
+	}
+	if sed.Locked() || !sed.MBRDone() {
+		t.Errorf("locked SED not unlocked: locked=%v mbrDone=%v", sed.Locked(), sed.MBRDone())
+	}
+	if decoy.MBRDone() {
+		t.Error("non-target Opal drive must not be touched")
+	}
+	if !strings.Contains(buf.String(), "TRUSTED-PBA: sed unlock ok") {
+		t.Errorf("missing success marker; output: %q", buf.String())
 	}
 	assertPINConsumed(t, pol, pinBacking)
 }
