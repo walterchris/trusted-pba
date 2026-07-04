@@ -1,4 +1,4 @@
-//go:build !policytest && !pbatest && !sedtest
+//go:build !policytest && !pbatest && !sedtest && !winhandoff
 
 package policy
 

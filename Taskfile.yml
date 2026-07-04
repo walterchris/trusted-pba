@@ -177,6 +177,13 @@ tasks:
         vars: { OUT: '{{.APP}}-sedtest', EXTRA_TAGS: ",sedtest" }
       - test/qemu/mock-opal-matrix.sh {{.BIN}}/{{.APP}}-sedtest.efi {{.BIN}}/testapp.efi
 
+  win-handoff:
+    desc: Windows-handoff (A') — real Microsoft-signed loader verified by the PBA and loaded via firmware db under Secure Boot (needs sbsign, virt-firmware; set TPBA_REAL_WINLOADER/TPBA_REAL_SHIM or it skips). See ADR-0011.
+    cmds:
+      - task: _efi
+        vars: { OUT: '{{.APP}}-winhandoff', EXTRA_TAGS: ",winhandoff,trustfull" }
+      - test/qemu/win-handoff.sh {{.BIN}}/{{.APP}}-winhandoff.efi
+
   check-release-policy:
     desc: 'Release gate: fail if the DEFAULT embedded policy ships sed_unlock "none" (release.yml runs this; PR CI does not — the dev default is legitimately "none" until real auth lands)'
     cmds:
