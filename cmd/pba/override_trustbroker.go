@@ -9,27 +9,9 @@ import (
 
 	"github.com/walterchris/go-boot/uefi"
 	"github.com/walterchris/go-boot/uefi/x64"
+	"github.com/walterchris/trusted-pba/internal/tbstub"
 	"github.com/walterchris/trusted-pba/internal/truststore"
 )
-
-// Security2-override state (ADR-0012). securityStub (override_trustbroker_amd64.s)
-// reads these; installOverride writes them. Single-writer: the PBA is single-
-// goroutine and pre-boot, and `sbArmed` is written last as the release gate the
-// stub tests first, so the stub never observes a half-armed record.
-var (
-	sbArmed   uint64 // 1 = authorize the pinned buffer once
-	sbBufPtr  uint64 // &image[0] the PBA verified
-	sbBufSize uint64 // len(image)
-	sbSavedFn uint64 // original firmware FileAuthentication, tail-called on any mismatch
-)
-
-// securityStub is installed as EFI_SECURITY2_ARCH_PROTOCOL.FileAuthentication;
-// its body is in override_trustbroker_amd64.s. Firmware calls it (MS x64 ABI) on
-// LoadImage. Never called from Go — only its address is taken (securityStubAddr).
-func securityStub()
-
-// securityStubAddr returns the raw entry address of securityStub (asm helper).
-func securityStubAddr() uint64
 
 // security2GUID is EFI_SECURITY2_ARCH_PROTOCOL_GUID — the firmware image-auth
 // protocol gBS->LoadImage consults under enforcing Secure Boot.
@@ -37,9 +19,10 @@ var security2GUID = uefi.MustParseGUID("94ab2f58-1438-4ef1-9152-18941a3a0e68")
 
 // verifyAndLoadOverride is the pba-override path (ADR-0012): the PBA verifies the
 // image against its embedded trust store, then authorizes exactly that buffer to
-// the firmware via a Security2 override so it loads even when firmware db would
-// reject it (e.g. an our-keys-only platform booting an MS-signed loader). Every
-// error fails closed; the override is armed for one matching buffer and self-disarms.
+// the firmware via a Security2 override (internal/tbstub) so it loads even when
+// firmware db would reject it (e.g. an our-keys-only platform booting an MS-signed
+// loader). Every error fails closed; the override is armed for one matching buffer
+// and self-disarms.
 //
 // NOTE (ADR-0012): this diverges PCR 7 — do not use for BitLocker/measured-boot
 // targets; those use firmware-db validation (mode "firmware"/"pba").
@@ -69,6 +52,11 @@ func verifyAndLoadOverride(target string, enforcing bool) error {
 	}
 	fmt.Fprintf(out, "%s: pba-verified %s (trust set %s)\r\n", banner, target, truststore.TrustSet)
 
+	// Loud measured-boot warning: the override omits this image's PCR 7 authority
+	// event — a BitLocker seal to PCR 7 would break (ADR-0012). The operator, not
+	// code, is responsible for not using pba-override on a measured-boot target.
+	fmt.Fprintf(out, "%s: WARNING: pba-override diverges PCR 7 — not for BitLocker/measured-boot targets\r\n", banner)
+
 	restore, err := installOverride(&image[0], len(image))
 	if err != nil {
 		return fmt.Errorf("%s: override: %w", chainloadFail, err)
@@ -91,7 +79,7 @@ func verifyAndLoadOverride(target string, enforcing bool) error {
 }
 
 // installOverride locates the firmware Security2 arch protocol, saves its
-// FileAuthentication pointer, arms the stub to authorize exactly [ptr,size) once,
+// FileAuthentication pointer, arms the tbstub to authorize exactly [ptr,size) once,
 // and installs the stub. It fails closed if the protocol is absent. The returned
 // restore func reinstalls the original handler and disarms; call it (deferred).
 func installOverride(ptr *byte, size int) (restore func(), err error) {
@@ -100,14 +88,13 @@ func installOverride(ptr *byte, size int) (restore func(), err error) {
 		return nil, fmt.Errorf("locate Security2: %w", err)
 	}
 	slot := (*uint64)(unsafe.Pointer(uintptr(addr))) // FileAuthentication at offset 0
-	sbSavedFn = *slot
-	sbBufPtr = uint64(uintptr(unsafe.Pointer(ptr)))
-	sbBufSize = uint64(size)
-	sbArmed = 1                // release gate: the stub authorizes only after this
-	*slot = securityStubAddr() // install
-	fmt.Fprintf(out, "%s: override armed (Security2 @ 0x%x, buf 0x%x/%d)\r\n", banner, addr, sbBufPtr, size)
+	orig := *slot
+	tbstub.Arm(uintptr(unsafe.Pointer(ptr)), uint64(size), orig)
+	*slot = tbstub.StubAddr() // install
+	fmt.Fprintf(out, "%s: override armed (Security2 @ 0x%x, buf 0x%x/%d)\r\n",
+		banner, addr, uintptr(unsafe.Pointer(ptr)), size)
 	return func() {
-		*slot = sbSavedFn // reinstall the firmware handler
-		sbArmed = 0       // disarm
+		*slot = orig // reinstall the firmware handler
+		tbstub.Disarm()
 	}, nil
 }
