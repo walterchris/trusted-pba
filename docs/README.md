@@ -53,4 +53,5 @@ Populated as their tickets land; this index links the per-topic docs that now ex
   [release process](development/release-process.md) ·
   [dependency management](development/dependency-management.md) ·
   [go coding standards](development/go-coding-standards.md) ·
-  [branching](development/branching.md)
+  [branching](development/branching.md) ·
+  [manual hardware testing](development/hardware-testing.md)
