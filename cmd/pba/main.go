@@ -108,6 +108,7 @@ func run(pol *policy.Policy, enforcing bool) error {
 		return fmt.Errorf("policy: no bootable target: %w", err)
 	}
 	fmt.Fprintf(out, "%s: target %q (%s) via %s\r\n", banner, entry.Name, entry.Path, entry.Validation)
+	maybeOverrideSpike(out) // no-op unless built -tags overridespike (ADR-0012 / #82 spike)
 	return chainload(entry)
 }
 
