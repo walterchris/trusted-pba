@@ -184,6 +184,38 @@ tasks:
         vars: { OUT: '{{.APP}}-winhandoff', EXTRA_TAGS: ",winhandoff,trustfull" }
       - test/qemu/win-handoff.sh {{.BIN}}/{{.APP}}-winhandoff.efi
 
+  tpmread:
+    desc: Build the gnu-efi EFI_TCG2 PCR-reader fixture (bin/tpmread.efi) for measured-boot tests
+    vars:
+      EFILIB:
+        sh: echo "${EFILIB:-/usr/lib}"
+      EFIINC:
+        sh: echo "${EFIINC:-/usr/include/efi}"
+      CFLAGS: -I{{.EFIINC}} -I{{.EFIINC}}/x86_64 -fpic -ffreestanding -fno-stack-protector -fno-strict-aliasing -fshort-wchar -mno-red-zone -Wall
+    cmds:
+      - mkdir -p {{.BIN}}
+      - gcc {{.CFLAGS}} -c test/fixtures/tpmread/tpmread.c -o {{.BIN}}/tpmread.o
+      - >-
+        ld {{.BIN}}/tpmread.o {{.EFILIB}}/crt0-efi-x86_64.o -nostdlib -znocombreloc
+        -T {{.EFILIB}}/elf_x86_64_efi.lds -shared -Bsymbolic -L{{.EFILIB}} -lgnuefi -lefi
+        -o {{.BIN}}/tpmread.so
+      - >-
+        objcopy -j .text -j .sdata -j .data -j .dynamic -j .dynsym
+        -j '.rel.*' -j '.rela.*' -j .rel -j .rela -j .reloc
+        --target efi-app-x86_64 {{.BIN}}/tpmread.so {{.BIN}}/tpmread.efi
+      - echo "built {{.BIN}}/tpmread.efi"
+
+  override-pcr:
+    desc: 'ADR-0012 task 5: prove pba-override diverges PCR 7 (builds a TPM-enabled OVMF via build-ovmf-tpm.sh; needs swtpm, sbsign, virt-firmware, gnu-efi)'
+    cmds:
+      - task: testapp
+      - task: tpmread
+      - test/qemu/pba-setup.sh {{.BIN}}/testapp.efi
+      - task: _efi
+        vars: { OUT: '{{.APP}}-overridetest', EXTRA_TAGS: ",overridetest,pbatest,trustbroker" }
+      - task: build
+      - test/qemu/override-pcr.sh {{.BIN}}/{{.APP}}-overridetest.efi {{.BIN}}/{{.APP}}.efi {{.BIN}}/tpmread.efi
+
   check-release-policy:
     desc: 'Release gate: fail if the DEFAULT embedded policy ships sed_unlock "none" (release.yml runs this; PR CI does not — the dev default is legitimately "none" until real auth lands)'
     cmds:
