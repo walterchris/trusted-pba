@@ -18,7 +18,7 @@ import (
 func TestStubAuthorizesOnlyArmedBuffer(t *testing.T) {
 	const chain = uintptr(0xDEAD)
 	buf := make([]byte, 4096)
-	ptr := uintptr(unsafe.Pointer(&buf[0]))
+	ptr := uintptr(unsafe.Pointer(&buf[0])) //nolint:gosec // test needs raw pointer identity to exercise the stub
 	size := uint64(len(buf))
 	orig := fakeOriginalAddr()
 
@@ -47,7 +47,7 @@ func TestStubAuthorizesOnlyArmedBuffer(t *testing.T) {
 
 	// 4. armed but DIFFERENT POINTER (same size) -> chain.
 	buf2 := make([]byte, len(buf))
-	ptr2 := uintptr(unsafe.Pointer(&buf2[0]))
+	ptr2 := uintptr(unsafe.Pointer(&buf2[0])) //nolint:gosec // test needs raw pointer identity to exercise the stub
 	Arm(ptr, size, orig)
 	if got := callStub(0, 0, ptr2, uintptr(size), 0); got != chain {
 		t.Errorf("wrong pointer: got 0x%x, want chain", got)
