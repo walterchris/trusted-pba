@@ -249,9 +249,9 @@ virtually — see [`docs/test-tooling-plan.md`](docs/test-tooling-plan.md).
 - **Threat model &amp; risk assessment:** [`docs/security/threat-model.md`](docs/security/threat-model.md)
   and [`docs/compliance/risk-assessment.md`](docs/compliance/risk-assessment.md).
 
-> **Reporting a vulnerability:** _security contact / disclosure process to be finalized._
-> Until then, do not open a public issue for a security report — contact the maintainers
-> privately.
+> **Reporting a vulnerability:** please **don't** open a public issue. Use GitHub's
+> **Report a vulnerability** (Security tab) or email <security@9elements.com>. See
+> [`SECURITY.md`](SECURITY.md) for scope and process.
 
 ## Documentation
 
