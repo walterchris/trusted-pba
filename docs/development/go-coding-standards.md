@@ -46,8 +46,8 @@ for the stdlib type/composition that already does it** (`io.Writer`/`io.Reader`,
 ## 4. Interfaces & composition
 - Interfaces are small (1–3 methods). Define them where they are **consumed**, not
   where implemented.
-- **Accept interfaces, return concrete types.** e.g. the Opal layer takes a
-  `transport.TCG` interface; constructors return `*opal.Session`.
+- **Accept interfaces, return concrete types.** e.g. the Opal layer takes an
+  `opal.Transport` interface; constructors return `*opal.Session`.
 - Prefer composing standard interfaces (`io.Writer`, `io.Reader`) over inventing
   parallel ones — this is what makes `io.MultiWriter` etc. usable (see §0).
 - `any`, not `interface{}`.
