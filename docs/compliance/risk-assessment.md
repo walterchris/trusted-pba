@@ -42,6 +42,7 @@ secret).
 | R-011 | Embedded trust anchors go stale (2011 CAs expire 2026-06-27) | A5 | I/A | High | High | **Medium** | Open — ADR-gated refresh |
 | R-012 | TOCTOU: target re-read after verification (SB-off) | A6 | I | Low | High | **Low** | Mitigated (verified-buffer load, #46) |
 | R-013 | Expired-but-valid signing key reused (expiry ignored) | A6 | I | Low | High | **Low** | Accepted — control is dbx; #48 |
+| R-014 | `pba-override` Secure Boot override boots an out-of-`db` image | A2/A5/A6 | I/A | Low | High | **Low** | Gated — `-tags trustbroker` + explicit `pba-override` policy opt-in, off by default (not in release builds); fail-closed (enforcing-SB precondition + verify before arm, one-shot disarm); PCR-7 divergence characterized, scoped away from Windows/BitLocker (ADR-0012/0013; threat-model TB2/R-014). Pending production-acceptance (ADR-0013) + merge; #82 |
 
 ## Detailed risks
 
