@@ -76,23 +76,36 @@ PCR 7 dependency is well established; the precise BitLocker seal profile was not
 verified against a primary Microsoft spec and must be confirmed before any Windows
 override work.)
 
-### Measured-boot characterization — spike finding (task 5)
+### Measured-boot characterization — spike finding (task 5), empirically confirmed
 
-Verified virtually (`test/qemu/override-vtpm.sh`, swtpm + QEMU `tpm-tis`): the
-`pba-override` path **boots correctly with a vTPM present** — the override does not
-break booting under measured boot; firmware measures the boot as usual.
+The `pba-override` path **boots correctly with a vTPM present** (`override-vtpm.sh`,
+swtpm + QEMU `tpm-tis`) — the override does not break booting under measured boot.
 
-Empirical PCR-7 *digit* capture was **not** achievable with the QEMU/swtpm/tpm2-tools
-toolchain, and this is itself a finding: QEMU's `tpm-emulator` establishes the TPM
-data channel by passing an fd to swtpm via `CMD_SET_DATAFD` over a **UNIX** control
-socket (`SCM_RIGHTS`), which (a) rules out a TCP control socket and (b) precludes a
-concurrent swtpm `--server` channel for `tpm2-tools`; and PCRs are volatile, lost when
-swtpm exits with QEMU. So a post-boot read-back is blocked. Getting real PCR-7 digits
-therefore requires a **guest-side `EFI_TCG2_PROTOCOL` event-log dumper** (a small EFI
-app) — tracked as a follow-up. The PCR-7 **divergence itself** is not in doubt: it
-follows directly from the TCG mechanism above (an image authorized outside `db` gets
-no `db` `EV_EFI_VARIABLE_AUTHORITY` event in PCR 7), which is why this override is
-**scoped away from the Windows/BitLocker path**.
+**PCR 7 divergence is empirically confirmed** (`test/qemu/override-pcr.sh`). Booting a
+guest `EFI_TCG2_PROTOCOL` PCR reader (`test/fixtures/tpmread`) two ways under a
+TPM-enabled OVMF + swtpm and comparing the PCR 7 it prints:
+
+- **Override** (fixture authorized by the Security2 override, not in `db`) →
+  `PCR7 = d3644e07…`
+- **Firmware** (same fixture validated by a *distinct* `db` authority) →
+  `PCR7 = d595adce…` — **they differ.**
+
+So authorizing an image via the override omits its `EV_EFI_VARIABLE_AUTHORITY` event
+from PCR 7 → PCR 7 diverges from a firmware-`db` boot → a BitLocker seal bound to PCR 7
+would not release. This is why the override is **scoped away from the Windows/BitLocker
+path**.
+
+Two toolchain notes for reproducing this:
+1. **PCR 7 authority events are deduplicated per authority.** The divergence is only
+   visible when the overridden image's `db` authority is *distinct* from the PBA's —
+   exactly the real Windows case (PBA = our key, `bootmgfw` = Microsoft's). Signing
+   both with the same key makes PCR 7 identical (the fixture's authority is deduped).
+2. **A TPM-enabled OVMF is required.** Fedora's `edk2-ovmf` ships OVMF *without* TPM2
+   (no `EFI_TCG2_PROTOCOL`, nothing measured); `build-ovmf-tpm.sh` builds one from the
+   pinned edk2 with `-D TPM2_ENABLE -D SECURE_BOOT_ENABLE`. Reading PCRs from the
+   guest (via `EFI_TCG2_PROTOCOL`) is used because QEMU's `tpm-emulator` owns swtpm's
+   control channel (fd-passing over a UNIX socket via `CMD_SET_DATAFD`), so an external
+   `tpm2-tools` read of the same swtpm is not possible and PCRs are volatile.
 
 ### Feasibility in our stack (go-boot / TamaGo)
 
