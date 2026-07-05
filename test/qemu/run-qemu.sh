@@ -89,6 +89,19 @@ else
 	DISK_ARGS=(-drive "format=raw,file=$IMG")
 fi
 
+# Optional vTPM for measured-boot tests: if QEMU_TPM_SOCK points at a running swtpm
+# control socket, attach a TPM 2.0 (tpm-tis) so firmware measures the boot. It MUST
+# be a UNIX socket and swtpm must run with only `--ctrl type=unixio` (no --server):
+# QEMU's tpm-emulator hands the TPM data channel to swtpm via CMD_SET_DATAFD (an fd
+# passed over the ctrl socket, SCM_RIGHTS), which needs a UNIX socket and no
+# competing --server channel. Keep the socket path short (sockaddr_un ~108 chars).
+TPM_ARGS=()
+if [ -n "${QEMU_TPM_SOCK:-}" ]; then
+	TPM_ARGS=(-chardev "socket,id=chrtpm,path=$QEMU_TPM_SOCK"
+		-tpmdev emulator,id=tpm0,chardev=chrtpm
+		-device tpm-tis,tpmdev=tpm0)
+fi
+
 # Run QEMU as a child (not exec) so the cleanup trap reclaims $WORK on exit —
 # under exec the EXIT trap never fired and the per-run ESP/VARS images leaked
 # locally. QEMU shares this script's process group, so expect-serial.py's
@@ -99,6 +112,7 @@ qemu-system-x86_64 \
 	-drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
 	-drive if=pflash,format=raw,unit=1,file="$VARS" \
 	"${DISK_ARGS[@]}" \
+	"${TPM_ARGS[@]}" \
 	-net none -no-reboot &
 QEMU_PID=$!
 wait "$QEMU_PID"

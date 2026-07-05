@@ -76,6 +76,24 @@ PCR 7 dependency is well established; the precise BitLocker seal profile was not
 verified against a primary Microsoft spec and must be confirmed before any Windows
 override work.)
 
+### Measured-boot characterization — spike finding (task 5)
+
+Verified virtually (`test/qemu/override-vtpm.sh`, swtpm + QEMU `tpm-tis`): the
+`pba-override` path **boots correctly with a vTPM present** — the override does not
+break booting under measured boot; firmware measures the boot as usual.
+
+Empirical PCR-7 *digit* capture was **not** achievable with the QEMU/swtpm/tpm2-tools
+toolchain, and this is itself a finding: QEMU's `tpm-emulator` establishes the TPM
+data channel by passing an fd to swtpm via `CMD_SET_DATAFD` over a **UNIX** control
+socket (`SCM_RIGHTS`), which (a) rules out a TCP control socket and (b) precludes a
+concurrent swtpm `--server` channel for `tpm2-tools`; and PCRs are volatile, lost when
+swtpm exits with QEMU. So a post-boot read-back is blocked. Getting real PCR-7 digits
+therefore requires a **guest-side `EFI_TCG2_PROTOCOL` event-log dumper** (a small EFI
+app) — tracked as a follow-up. The PCR-7 **divergence itself** is not in doubt: it
+follows directly from the TCG mechanism above (an image authorized outside `db` gets
+no `db` `EV_EFI_VARIABLE_AUTHORITY` event in PCR 7), which is why this override is
+**scoped away from the Windows/BitLocker path**.
+
 ### Feasibility in our stack (go-boot / TamaGo)
 
 Verified in the fork: go-boot exposes **no** Security/Security2 arch protocol, **no**
