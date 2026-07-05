@@ -19,15 +19,19 @@ jobs:
     environment: release   # protected environment -> required human approval gate
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - name: Install go-task
         uses: arduino/setup-task@v2
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      # Release-only gate (#22): a release artifact must never silently ship a
-      # default policy with sed_unlock "none" (PR CI does not check this — the
-      # dev default is legitimately "none" until real auth lands).
-      - name: Release policy gate (default embedded policy must not skip the SED unlock)
+      # Release-only gate (#22, #90): a release artifact must never silently ship an
+      # unsafe default policy — Secure Boot must be required, the SED unlock must not
+      # be skipped, and no test-fixture boot target. PR CI does not check this: the
+      # dev default is legitimately not release-ready until real auth lands.
+      - name: Release policy gate (default embedded policy must be release-ready)
         run: task check-release-policy
       - name: Build release artifact (placeholder)
         run: |

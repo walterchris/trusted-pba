@@ -3,6 +3,7 @@ package policy
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -137,6 +138,63 @@ func TestCheckSecureBoot(t *testing.T) {
 		err := (&Policy{RequireSecureBoot: c.require}).CheckSecureBoot(c.enforcing)
 		if (err != nil) != c.wantErr {
 			t.Errorf("require=%v enforcing=%v: err=%v wantErr=%v", c.require, c.enforcing, err, c.wantErr)
+		}
+	}
+}
+
+// TestCheckReleaseReady covers the release gate: a production-safe policy passes,
+// and each unsafe development default (Secure Boot not required — explicit false
+// AND absent — sed_unlock "none", a test-fixture target) fails closed. The last
+// case proves violations are reported together.
+func TestCheckReleaseReady(t *testing.T) {
+	prod := func() *Policy {
+		return &Policy{
+			RequireSecureBoot: true,
+			SEDUnlock:         SEDUnlockRequired,
+			SEDPIN:            PIN("x"),
+			Entries:           []BootEntry{{Name: "os", Path: "EFI/Microsoft/Boot/bootmgfw.efi", Validation: Firmware}},
+		}
+	}
+	cases := []struct {
+		name    string
+		mutate  func(*Policy)
+		wantErr bool
+	}{
+		{"production-safe", func(*Policy) {}, false},
+		{"secure boot not required", func(p *Policy) { p.RequireSecureBoot = false }, true},
+		{"sed_unlock none", func(p *Policy) { p.SEDUnlock = SEDUnlockNone; p.SEDPIN = nil }, true},
+		{"test-fixture target", func(p *Policy) { p.Entries[0].Path = "EFI/TEST/TESTAPP.EFI" }, true},
+		{"test-fixture target lowercase", func(p *Policy) { p.Entries[0].Path = "efi/test/testapp.efi" }, true},
+		{"pba-override to a real path is allowed", func(p *Policy) { p.Entries[0].Validation = PBAOverride }, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := prod()
+			c.mutate(p)
+			if err := p.CheckReleaseReady(); (err != nil) != c.wantErr {
+				t.Errorf("CheckReleaseReady() err=%v, wantErr=%v", err, c.wantErr)
+			}
+		})
+	}
+
+	// The dev default (parsed from an absent require_secure_boot) must be blocked:
+	// absent -> false -> unsafe, not a silent pass.
+	absent := &Policy{SEDUnlock: SEDUnlockRequired, SEDPIN: PIN("x"),
+		Entries: []BootEntry{{Name: "os", Path: "EFI/BOOT/BOOTX64.EFI", Validation: Firmware}}}
+	if err := absent.CheckReleaseReady(); err == nil {
+		t.Error("absent require_secure_boot must be treated as unsafe (blocked), got nil")
+	}
+
+	// All three violations at once are reported together (errors.Join).
+	all := &Policy{RequireSecureBoot: false, SEDUnlock: SEDUnlockNone,
+		Entries: []BootEntry{{Name: "t", Path: "EFI/TEST/TESTAPP.EFI", Validation: Firmware}}}
+	err := all.CheckReleaseReady()
+	if err == nil {
+		t.Fatal("all-unsafe policy must fail")
+	}
+	for _, want := range []string{"require_secure_boot", "sed_unlock", "test-fixture"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("joined error missing %q; got: %v", want, err)
 		}
 	}
 }
