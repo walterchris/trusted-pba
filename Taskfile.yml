@@ -168,6 +168,17 @@ tasks:
         vars: { OUT: '{{.APP}}-pbatest', EXTRA_TAGS: ",pbatest" }
       - test/qemu/pba-run.sh {{.BIN}}/{{.APP}}-pbatest.efi {{.BIN}}/testapp.efi
 
+  override-matrix:
+    desc: 'pba-override trust-broker matrix — CONTROL (firmware rejects out-of-db) / POS (override boots) / TAMPER (unsigned fails closed) / SB-OFF (refuses when not enforcing). Gated behind -tags trustbroker (needs sbsign, virt-firmware, openssl).'
+    cmds:
+      - task: testapp
+      - test/qemu/pba-setup.sh {{.BIN}}/testapp.efi
+      - task: _efi
+        vars: { OUT: '{{.APP}}-pbatest', EXTRA_TAGS: ",pbatest" }
+      - task: _efi
+        vars: { OUT: '{{.APP}}-overridetest', EXTRA_TAGS: ",overridetest,pbatest,trustbroker" }
+      - test/qemu/override-trustbroker.sh {{.BIN}}/{{.APP}}-pbatest.efi {{.BIN}}/{{.APP}}-overridetest.efi {{.BIN}}/pbatest/testapp-signed.efi {{.BIN}}/testapp.efi
+
   mock-opal-matrix:
     desc: Mock-Opal integration matrix — unlock→MBRDone→chainload + fault negatives against MockOpalDxe in QEMU/OVMF (needs EDK2 build deps, sbsign, virt-firmware)
     cmds:
