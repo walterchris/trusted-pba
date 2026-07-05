@@ -59,6 +59,18 @@ The ten core assets from baseline §10, with current location/status:
   it chainloads and does not wrap firmware boot services or enforce its policy
   transitively; the loaded stage brokers its own downstream trust (shim-style) or
   relies on firmware-provisioned keys.
+  **`pba-override` exception (ADR-0012, gated).** In the explicit `pba-override`
+  validation mode — compiled only with `-tags trustbroker` (out of default/release
+  builds) and opted into per boot entry — the PBA additionally installs a SHIM-style
+  `EFI_SECURITY2_ARCH_PROTOCOL` override so an image it verified but firmware `db`
+  does *not* trust still loads (an our-keys-only platform booting e.g. an MS-signed
+  loader). This makes the PBA an **authority for out-of-`db` images** — a deliberate,
+  narrow Secure Boot override, not a widening of the default trust. It is fail-closed
+  (verify → arm exactly the one verified buffer by pointer+size → install → load →
+  restore/one-shot-disarm; any error refuses to boot) and **scoped away from the
+  Windows/measured-boot path**: it omits the image's `EV_EFI_VARIABLE_AUTHORITY`
+  event from PCR 7 (empirically confirmed, `override-pcr.sh`), so a BitLocker seal to
+  PCR 7 would break. See R-014.
 - **TB3 PBA → SED (Opal transport).** Live. The Opal layer talks to the drive
   through the abstract `TCGTransport` interface, implemented over the UEFI
   Storage Security Command Protocol (`internal/transport`, Phase 5, ADR-0008)
@@ -273,6 +285,7 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock library + Phase 6 boot w
 | R-011 | Trust-anchor staleness (2011 CAs expire 2026-06-27) | Open — ADR-gated refresh; 2023 CAs embedded |
 | R-012 | SB-off TOCTOU re-read window | Mitigated (#46) — verified-buffer chainload; residual Low |
 | R-013 | Ignore signing-cert expiry (firmware semantics) | Accepted — control is dbx; research #48 |
+| R-014 | `pba-override` is a Secure Boot override (authorizes an out-of-`db` image) | Gated — `-tags trustbroker` + explicit `pba-override` policy opt-in; fail-closed (verify→arm-one-buffer→restore); PCR-7 divergence characterized, scoped away from Windows/BitLocker (ADR-0012). Pending production-acceptance ADR + security review (#82). |
 
 ## 9. Test mapping
 
@@ -312,3 +325,4 @@ GOAL B: Obtain the SED unlock secret    [Phase 4 unlock library + Phase 6 boot w
 | 2026-06-15 | §6.1/R-001 test coverage (#37): added an end-to-end **dbx-by-cert revocation** scenario to `pba-matrix` (a validly-signed, db-chaining target whose signer is in dbx → rejected specifically by revocation; mutation-proven non-vacuous). Test-only + a mechanical trust-store refactor (the embedded dbx source is now build-tag-selected so the `pbatest` build substitutes a crafted test dbx; default/`trustfull` builds keep the full real Microsoft dbx — verified, 431 hashes). No behavior change to real builds, no new threats. |
 | 2026-06-16 | §6.1/R-001 test coverage (#18, Secure Boot test matrix epic): added `secureboot-matrix` scenario **E** — the **firmware's own** Secure Boot engine rejects a **db-trusted** PBA image because its Authenticode hash is in **dbx** (revocation overrides trust, **dbx > db**), closing the missing firmware-validation-path revocation case (complementary to #37's PBA-path coverage). Strengthens R-001 and **TB1** (Firmware → PBA); non-vacuous (scenario B boots, E rejected "Access Denied", wrong-hash control boots); digest from the new host helper via the same `go-uefi/authenticode` library `internal/imageverify` uses (one source of truth). Test-only; **no rating change** (residual stays Low), no new threats. Review record: `evidence/security-review-records/2026-06-16-firmware-path-dbx-hash-revocation-18.md`. |
 | 2026-06-28 | First real-hardware bring-up (Swissbit OPAL drive, 4-NVMe board; ADR-0009 Amendment 2026-06-28, Proposed). **A1/A7 / R-002:** on a multi-NVMe machine firmware exposes one Storage Security carrier per drive, so the unlock now **selects the Opal SED** — `transport.NewAll()` enumerates every `EFI_STORAGE_SECURITY_COMMAND_PROTOCOL` handle (go-boot `v1.6.2-tpba.5`) and `cmd/pba selectSED` picks the one whose Level-0 Discovery succeeds, unlocking only that one. Fail-closed preserved (no Discovery-responsive SED → hard error, never chainload) and now unit-tested (`TestUnlockSEDSelectsResponsiveSED`, `TestUnlockSEDNoResponsiveSEDFailsClosed`, `c962b12`); PIN consumed/zeroized once on the selected device. ComID byte-swap (`transport.swapComID`) is a transport-layer conformance detail — firmware writes SP-Specific in the opposite byte order to the TCG ComID; the EDK2 mock mirrors it, host MockTPer unaffected — not a trust-boundary or security-model change. **Accepted residual:** targeting a *specific* drive among MULTIPLE Opal SEDs is a future refinement (today: first Discovery-responsive SED; wrong-drive pick fails auth → fail closed). The "MediaId 0" hypothesis was disproven (MediaId 0 correct). §6.6 pin → tpba.5. No new threats, no rating change. Review record: `evidence/security-review-records/2026-06-28-opal-hw-bringup-handle-select-comid.md`. |
+| 2026-07-05 | `pba-override` Secure Boot trust broker (ADR-0012, `-tags trustbroker`, spike #82 tasks 2–5). **TB2 exception + R-014:** a new, explicit, gated validation mode installs a SHIM-style `EFI_SECURITY2_ARCH_PROTOCOL` override (runtime-free asm stub authorizing exactly the one PBA-verified buffer by pointer+size, one-shot disarm, restore) so an out-of-`db` image the PBA trusts loads under enforcing Secure Boot — making the PBA an authority for out-of-`db` images. Fail-closed (verify before arm; any error refuses to boot); absent the tag a `pba-override` entry fails closed. **Scoped away from Windows/BitLocker:** empirically confirmed to diverge PCR 7 (`override-pcr.sh`; TPM-enabled OVMF via `build-ovmf-tpm.sh` + guest `EFI_TCG2` reader `test/fixtures/tpmread`). Not in default/release builds; pending production-acceptance ADR + independent security review before any merge to main. No change to default-build trust. |
