@@ -1,10 +1,11 @@
 # ADR-0013: Accept the `pba-override` Security2 trust broker (gated, non-Windows)
 
 ## Status
-Proposed — the §5.3/§23 human gate (security-critical boot behavior) is satisfied by
-the Security/Release Owner merging the implementation PR (branch
-`feat/trust-broker-override`) after the independent security review. Follow-up to
-**ADR-0012** (the spike/decision record), which deferred the production decision to
+Accepted (2026-07-05) — the §5.3/§23 human gate (security-critical boot behavior) was
+satisfied by the Security/Release Owner merging PR #88 (rebase; `main` tip `5fc25fd`)
+after the independent security review recorded in
+`evidence/security-review-records/2026-07-05-pba-override-trust-broker-82.md`. Follow-up
+to **ADR-0012** (the spike/decision record), which deferred the production decision to
 this ADR.
 
 ## Context
@@ -48,15 +49,17 @@ The spike and production build-out (#82, tasks 1–5) are complete and validated
 4. **Merge, but keep it inert in shipped builds** until a concrete deployment needs it;
    this ADR accepts the *capability and its gating*, not its default activation.
 
-## Pre-merge requirements (this ADR is not "Accepted" until these hold)
-- **Independent security review** (security-review-agent) of `feat/trust-broker-override`
-  with no unresolved merge-blockers.
-- **Close the stub test gap:** the QEMU matrix exercises verify-then-boot and
-  fail-closed-before-arm, but **not** the stub's *mismatch → chain-to-original* or
-  *one-shot disarm* paths (TAMPER fails at verify, before the stub runs). Add a targeted
-  test (a host MS-ABI harness for the stub, or a QEMU scenario that arms then loads a
-  different image) before merge.
-- **CI green** on the branch.
+## Pre-merge requirements (satisfied at merge — PR #88, 2026-07-05)
+- ✅ **Independent security review** (security-review-agent) of `feat/trust-broker-override`
+  with no unresolved merge-blockers. Round 1 BLOCK (F1 enforcing-SB gate, F2/F3 stub test
+  gap) → both resolved → Round 2 APPROVE. Record:
+  `evidence/security-review-records/2026-07-05-pba-override-trust-broker-82.md`.
+- ✅ **Stub test gap closed:** `internal/tbstub/stub_test.go` drives the real asm stub via a
+  host MS-ABI harness across all five branches (armed+match → SUCCESS + one-shot disarm,
+  re-call → chain, wrong-size → chain + stays-armed, wrong-ptr → chain, not-armed → chain);
+  mutation-proven and re-run by the reviewer.
+- ✅ **CI green** on the branch (12/12 checks, including the `internal/tbstub` test under
+  Go 1.26.4 via `go-version-file: go.mod`).
 
 ## Alternatives Considered
 - **Do not build it (stay ADR-0010 single-hop-via-firmware-`LoadImage`).** Simplest and
