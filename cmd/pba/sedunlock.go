@@ -17,13 +17,11 @@ import (
 const banner = "TRUSTED-PBA"
 
 // newCredentialSource builds the credential.Source unlockSED resolves the PIN
-// from. It is a package variable so host tests can inject a source that fails
-// closed on Resolve (a stand-in for the console/keyfile/TPM sources ADR-0011
-// adds); production always uses the policy-pin source over the compiled-in PIN.
-// It takes ownership of pin.
-var newCredentialSource = func(pin []byte) credential.Source {
-	return credential.NewPolicyPIN(pin)
-}
+// from (it takes ownership of the PIN bytes). It is a package variable so host
+// tests can inject a source that fails closed on Resolve (a stand-in for the
+// console/keyfile/TPM sources ADR-0011 adds); production always uses the
+// policy-pin source over the compiled-in PIN.
+var newCredentialSource = credential.NewPolicyPIN
 
 // unlockSED enforces the policy's SED unlock gate before any chainload.
 //
