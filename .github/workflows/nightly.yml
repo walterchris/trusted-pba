@@ -1,0 +1,59 @@
+# Nightly deep checks — things per-PR CI structurally can't do:
+#   - deeper fuzzing (minutes/target, vs the 30s PR smoke) to reach states short
+#     runs miss on the attacker-facing parsers;
+#   - govulncheck on UNCHANGED code, to catch vulnerabilities disclosed since the
+#     last commit (a security product must not wait for a code change to learn a
+#     dependency became vulnerable).
+# Runs on a schedule and on demand. Failures are surfaced via the Actions tab.
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *" # 03:17 UTC daily (off the top of the hour)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deep-fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pkg: ./internal/policy
+            fuzz: FuzzParse
+          - pkg: ./internal/opal
+            fuzz: FuzzResponseParse
+          - pkg: ./internal/imageverify
+            fuzz: FuzzVerify
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: deep fuzz ${{ matrix.fuzz }} (10m)
+        run: go test -run='^$' -fuzz='^${{ matrix.fuzz }}$' -fuzztime=10m ${{ matrix.pkg }}
+      - name: Upload any new crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers-${{ matrix.fuzz }}
+          path: ${{ matrix.pkg }}/testdata/fuzz/
+          if-no-files-found: ignore
+
+  vuln-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Re-run on unchanged code: catches newly-disclosed advisories against the
+      # pinned dependency set without waiting for a commit.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          "$(go env GOPATH)/bin/govulncheck" ./...
