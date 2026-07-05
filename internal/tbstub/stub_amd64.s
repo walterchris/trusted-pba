@@ -1,4 +1,4 @@
-//go:build tamago && amd64 && trustbroker
+//go:build amd64
 
 #include "textflag.h"
 
@@ -18,26 +18,25 @@
 // NOSPLIT|NOFRAME: no Go prologue / stack-split check — there is no valid `g` when
 // firmware calls in, so the Go runtime is never entered.
 TEXT ·securityStub(SB), NOSPLIT|NOFRAME, $0
-	MOVQ	·sbArmed(SB), AX
+	MOVQ	·armed(SB), AX
 	TESTQ	AX, AX
 	JZ	chain			// not armed -> firmware validates
-	MOVQ	·sbBufPtr(SB), AX
+	MOVQ	·bufPtr(SB), AX
 	CMPQ	AX, R8			// FileBuffer == armed pointer?
 	JNE	chain
-	MOVQ	·sbBufSize(SB), AX
+	MOVQ	·bufSize(SB), AX
 	CMPQ	AX, R9			// FileSize == armed size?
 	JNE	chain
 	// exact match: one-shot disarm, return EFI_SUCCESS (0)
-	MOVQ	$0, ·sbArmed(SB)
+	MOVQ	$0, ·armed(SB)
 	XORL	AX, AX
 	RET
 chain:
-	MOVQ	·sbSavedFn(SB), AX
+	MOVQ	·savedFn(SB), AX
 	JMP	AX			// tail-call the original handler, args intact
 
-// securityStubAddr returns the raw entry address of securityStub, to install into
-// the firmware Security2 protocol's FileAuthentication function-pointer field.
-TEXT ·securityStubAddr(SB), NOSPLIT, $0-8
+// StubAddr returns the raw entry address of securityStub.
+TEXT ·StubAddr(SB), NOSPLIT, $0-8
 	LEAQ	·securityStub(SB), AX
 	MOVQ	AX, ret+0(FP)
 	RET
