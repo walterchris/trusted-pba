@@ -136,6 +136,8 @@ func chainload(e policy.BootEntry) error {
 		return load(e.Path)
 	case policy.PBA:
 		return verifyAndLoad(e.Path)
+	case policy.PBAOverride:
+		return verifyAndLoadOverride(e.Path)
 	default:
 		return fmt.Errorf("%s: unknown validation mode %q", chainloadFail, e.Validation)
 	}
