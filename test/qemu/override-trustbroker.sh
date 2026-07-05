@@ -67,6 +67,15 @@ scenario "TAMPER: pba-override, unsigned fixture -> verify fails closed, overrid
 		FORBID='TEST-APP: ok,TRUSTED-PBA: override armed' \
 		python3 "$EXPECT" "$WORK/pba.override.efi"
 
+# SB-OFF: with Secure Boot NOT enforcing (Setup Mode, unenrolled vars), pba-override
+# must REFUSE to arm the override — enforcing SB is its precondition (ADR-0012/0013),
+# a defence-in-depth gate independent of require_secure_boot. The fixture must not run.
+scenario "SB-OFF: pba-override refuses to arm when Secure Boot is not enforcing" \
+	env OVMF_CODE="$OVMF_SECBOOT_CODE" OVMF_VARS="$OVMF_VARS_TEMPLATE" TESTAPP="$SIGNED" \
+		REQUIRE='pba-override requires enforcing Secure Boot' \
+		FORBID='TEST-APP: ok,TRUSTED-PBA: override armed' \
+		python3 "$EXPECT" "$WORK/pba.override.efi"
+
 echo
 if [ "$fail" -eq 0 ]; then
 	echo "TRUST-BROKER OVERRIDE MATRIX: PASS"

@@ -108,7 +108,7 @@ func run(pol *policy.Policy, enforcing bool) error {
 		return fmt.Errorf("policy: no bootable target: %w", err)
 	}
 	fmt.Fprintf(out, "%s: target %q (%s) via %s\r\n", banner, entry.Name, entry.Path, entry.Validation)
-	return chainload(entry)
+	return chainload(entry, enforcing)
 }
 
 // newUEFITransports adapts transport.NewAll to the constructor shape unlockSED
@@ -130,14 +130,15 @@ func newUEFITransports() ([]opal.Transport, error) {
 
 // chainload dispatches on the entry's validation mode. All error returns are
 // prefixed chainloadFail so the top-level fail-closed handler is greppable.
-func chainload(e policy.BootEntry) error {
+// enforcing is the firmware Secure Boot state; the pba-override path requires it.
+func chainload(e policy.BootEntry, enforcing bool) error {
 	switch e.Validation {
 	case policy.Firmware:
 		return load(e.Path)
 	case policy.PBA:
 		return verifyAndLoad(e.Path)
 	case policy.PBAOverride:
-		return verifyAndLoadOverride(e.Path)
+		return verifyAndLoadOverride(e.Path, enforcing)
 	default:
 		return fmt.Errorf("%s: unknown validation mode %q", chainloadFail, e.Validation)
 	}

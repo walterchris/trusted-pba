@@ -43,7 +43,13 @@ var security2GUID = uefi.MustParseGUID("94ab2f58-1438-4ef1-9152-18941a3a0e68")
 //
 // NOTE (ADR-0012): this diverges PCR 7 — do not use for BitLocker/measured-boot
 // targets; those use firmware-db validation (mode "firmware"/"pba").
-func verifyAndLoadOverride(target string) error {
+func verifyAndLoadOverride(target string, enforcing bool) error {
+	// The override makes the PBA's verdict authoritative for the firmware's load; it
+	// is only reasoned safe under ENFORCING Secure Boot (ADR-0012/0013). Refuse to
+	// arm otherwise — fail closed, defence-in-depth beyond require_secure_boot.
+	if !enforcing {
+		return fmt.Errorf("%s: pba-override requires enforcing Secure Boot", chainloadFail)
+	}
 	root, err := x64.UEFI.Root()
 	if err != nil {
 		return fmt.Errorf("%s: open ESP: %w", chainloadFail, err)
