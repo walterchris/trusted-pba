@@ -21,6 +21,13 @@ const (
 	// PBA means the PBA validates the image itself (Authenticode vs embedded
 	// db/dbx) before loading, via internal/imageverify.
 	PBA ValidationMode = "pba"
+	// PBAOverride is PBA validation plus a SHIM-style Secure Boot override so the
+	// image loads even when firmware db would reject it (a platform trusting only
+	// our PBA key). The PBA verifies the image, then authorizes exactly that buffer
+	// to the firmware via an EFI_SECURITY2_ARCH_PROTOCOL override (ADR-0012). It is
+	// compiled only with -tags trustbroker and diverges PCR 7 (not for BitLocker
+	// targets); without the tag a pba-override entry fails closed at chainload.
+	PBAOverride ValidationMode = "pba-override"
 )
 
 // BootEntry is one candidate boot target.
@@ -150,7 +157,7 @@ func Parse(data []byte) (*Policy, error) {
 			return nil, fmt.Errorf("entry %d: name and path are required", i)
 		}
 		switch e.Validation {
-		case Firmware, PBA:
+		case Firmware, PBA, PBAOverride:
 		default:
 			return nil, fmt.Errorf("entry %q: unknown validation mode %q", e.Name, e.Validation)
 		}
