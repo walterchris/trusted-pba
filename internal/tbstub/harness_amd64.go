@@ -11,7 +11,7 @@ func callStub(this, devPath, fileBuffer, fileSize, bootPolicy uintptr) uintptr
 
 // fakeOriginal is a stand-in "original firmware handler" that returns a sentinel so
 // a test can detect the stub's tail-call (chain) path. Never called from Go.
-func fakeOriginal()
+func fakeOriginal() //nolint:unused // implemented in asm (harness_amd64.s); address taken via fakeOriginalAddr
 
 // fakeOriginalAddr returns the address of fakeOriginal, for Arm's `original` arg.
 func fakeOriginalAddr() uint64

@@ -18,15 +18,15 @@ package tbstub
 // record.
 var (
 	armed   uint64
-	bufPtr  uint64
-	bufSize uint64
-	savedFn uint64
+	bufPtr  uint64 //nolint:unused // read by the asm stub (stub_amd64.s); write-only in Go
+	bufSize uint64 //nolint:unused // read by the asm stub (stub_amd64.s); write-only in Go
+	savedFn uint64 //nolint:unused // read by the asm stub (stub_amd64.s); write-only in Go
 )
 
 // securityStub is the FileAuthentication handler (asm, stub_amd64.s). Firmware calls
 // it with the Microsoft x64 ABI; it is never called from Go — only its address is
 // taken (StubAddr) and installed into the firmware protocol.
-func securityStub()
+func securityStub() //nolint:unused // implemented in asm (stub_amd64.s); address taken via StubAddr
 
 // StubAddr returns the raw entry address of securityStub, to write into the
 // firmware Security2 protocol's FileAuthentication field.
