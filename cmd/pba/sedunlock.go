@@ -74,7 +74,7 @@ func unlockSED(pol *policy.Policy, newTransports func() ([]opal.Transport, error
 	// it before authenticating — Unlock consumes and zeroizes the PIN, so it can run
 	// on exactly one transport. (Targeting a specific drive among several SEDs is a
 	// future refinement — ADR-0009.)
-	client, err := selectSED(transports)
+	client, err := selectSED(transports, w)
 	if err != nil {
 		return fmt.Errorf("sed unlock failed: %w", err)
 	}
@@ -89,7 +89,7 @@ func unlockSED(pol *policy.Policy, newTransports func() ([]opal.Transport, error
 // carriers — a drive reporting Opal SSC + locking-supported that is Locked with an
 // active Shadow MBR — and fails closed when none matches. Discovery is read-only and
 // touches no credential, so probing the non-target carriers (which error) is harmless.
-func selectSED(transports []opal.Transport) (*opal.Client, error) {
+func selectSED(transports []opal.Transport, w io.Writer) (*opal.Client, error) {
 	// A machine can expose several Opal-capable NVMe drives (e.g. a blank SSD that
 	// also answers Level-0 Discovery). The SED to unlock is the one that is locked
 	// with an active Shadow MBR — the drive the PBA was booted from. Selecting the
@@ -99,9 +99,17 @@ func selectSED(transports []opal.Transport) (*opal.Client, error) {
 	// an already-unlocked target. The rework ties selection to a specific drive
 	// identity (boot device, or an NVMe serial/WWN from policy/config); see #81.
 	// Discovery is read-only and PIN-free; it is re-run inside Unlock.
-	for _, t := range transports {
+	for i, t := range transports {
 		c := opal.NewClient(t)
 		d, err := c.Discover()
+		if sedDebug {
+			if err != nil {
+				_, _ = fmt.Fprintf(w, "%s: [hwdbg] dev %d/%d: discover error: %v\r\n", banner, i, len(transports), err)
+			} else {
+				_, _ = fmt.Fprintf(w, "%s: [hwdbg] dev %d/%d: OpalSSC=%t LockingSupported=%t Locked=%t MBREnabled=%t MBRDone=%t\r\n",
+					banner, i, len(transports), d.OpalSSC, d.LockingSupported, d.Locked, d.MBREnabled, d.MBRDone)
+			}
+		}
 		if err != nil || !d.OpalSSC || !d.LockingSupported {
 			continue
 		}
