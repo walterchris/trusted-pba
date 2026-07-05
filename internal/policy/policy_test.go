@@ -165,6 +165,10 @@ func TestCheckReleaseReady(t *testing.T) {
 		{"sed_unlock none", func(p *Policy) { p.SEDUnlock = SEDUnlockNone; p.SEDPIN = nil }, true},
 		{"test-fixture target", func(p *Policy) { p.Entries[0].Path = "EFI/TEST/TESTAPP.EFI" }, true},
 		{"test-fixture target lowercase", func(p *Policy) { p.Entries[0].Path = "efi/test/testapp.efi" }, true},
+		{"test-fixture leading ./", func(p *Policy) { p.Entries[0].Path = "./EFI/TEST/TESTAPP.EFI" }, true},
+		{"test-fixture leading /", func(p *Policy) { p.Entries[0].Path = "/EFI/TEST/TESTAPP.EFI" }, true},
+		{"test-fixture double slash", func(p *Policy) { p.Entries[0].Path = "EFI//TEST//TESTAPP.EFI" }, true},
+		{"test-fixture backslashes", func(p *Policy) { p.Entries[0].Path = `EFI\TEST\TESTAPP.EFI` }, true},
 		{"pba-override to a real path is allowed", func(p *Policy) { p.Entries[0].Validation = PBAOverride }, false},
 	}
 	for _, c := range cases {
