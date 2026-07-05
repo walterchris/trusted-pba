@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/walterchris/trusted-pba/internal/credential"
 	"github.com/walterchris/trusted-pba/internal/opal"
 	"github.com/walterchris/trusted-pba/internal/policy"
 	"github.com/walterchris/trusted-pba/internal/transport"
@@ -260,6 +261,56 @@ func TestUnlockSEDSkipsNonTargetOpalDrive(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "TRUSTED-PBA: sed unlock ok") {
 		t.Errorf("missing success marker; output: %q", buf.String())
+	}
+	assertPINConsumed(t, pol, pinBacking)
+}
+
+// errResolve is the sentinel a failing credential source returns.
+var errResolve = errors.New("resolve failed")
+
+// failingSource is a credential.Source whose Resolve fails closed. It models the
+// interactive/token sources ADR-0011 adds (console cancelled, keyfile missing,
+// TPM absent). It zeroizes the PIN it was handed so the wiring's ownership
+// contract (source owns pin until Resolve) still holds on the error path.
+type failingSource struct{ pin []byte }
+
+func (s *failingSource) Resolve(credential.Env) ([]byte, error) {
+	clear(s.pin)
+	return nil, errResolve
+}
+func (*failingSource) Kind() string { return "test-failing" }
+
+// TestUnlockSEDFailsClosedOnResolveError proves the credential-source
+// fail-closed path (ADR-0011 §5): when Resolve errors, unlockSED returns a hard
+// error, never constructs a transport (no chainload, no retry into boot), and
+// the error names the failing stage and source kind without leaking the PIN.
+func TestUnlockSEDFailsClosedOnResolveError(t *testing.T) {
+	// Not parallel: it swaps the package-level newCredentialSource, which the
+	// other (parallel) unlockSED tests read.
+	var buf bytes.Buffer
+	pol := requiredPolicy(testPIN)
+	pinBacking := []byte(pol.SEDPIN)
+
+	orig := newCredentialSource
+	t.Cleanup(func() { newCredentialSource = orig })
+	newCredentialSource = func(pin []byte) credential.Source { return &failingSource{pin: pin} }
+
+	construct := func() ([]opal.Transport, error) {
+		t.Fatal("resolve failure must not construct a transport")
+		return nil, nil
+	}
+	err := unlockSED(pol, construct, &buf)
+	if !errors.Is(err, errResolve) {
+		t.Fatalf("want wrapped resolve error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "sed unlock failed") || !strings.Contains(err.Error(), "test-failing") {
+		t.Errorf("error %q must carry the stage marker and the source kind", err)
+	}
+	if strings.Contains(err.Error(), testPIN) || strings.Contains(buf.String(), testPIN) {
+		t.Errorf("PIN leaked into error/output")
+	}
+	if strings.Contains(buf.String(), "sed unlock ok") {
+		t.Errorf("must not emit the success marker on resolve failure; output: %q", buf.String())
 	}
 	assertPINConsumed(t, pol, pinBacking)
 }

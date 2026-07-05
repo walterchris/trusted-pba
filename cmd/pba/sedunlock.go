@@ -8,12 +8,22 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/walterchris/trusted-pba/internal/credential"
 	"github.com/walterchris/trusted-pba/internal/opal"
 	"github.com/walterchris/trusted-pba/internal/policy"
 )
 
 // banner prefixes every console/serial line the PBA emits.
 const banner = "TRUSTED-PBA"
+
+// newCredentialSource builds the credential.Source unlockSED resolves the PIN
+// from. It is a package variable so host tests can inject a source that fails
+// closed on Resolve (a stand-in for the console/keyfile/TPM sources ADR-0011
+// adds); production always uses the policy-pin source over the compiled-in PIN.
+// It takes ownership of pin.
+var newCredentialSource = func(pin []byte) credential.Source {
+	return credential.NewPolicyPIN(pin)
+}
 
 // unlockSED enforces the policy's SED unlock gate before any chainload.
 //
@@ -29,9 +39,11 @@ const banner = "TRUSTED-PBA"
 // chainload and never retry into boot; reboot/halt leaves the drive to its
 // locked-on-reset state rather than re-driving a half-unlocked session.
 //
-// PIN handling: the policy's PIN is moved out of pol and handed to Unlock
-// exactly once, which consumes and zeroizes it. The deferred clear covers the
-// one path Unlock never sees the slice (transport construction failure) and is
+// PIN handling: the credential comes from a credential.Source (today the
+// policy-pin source built from pol.SEDPIN — ADR-0011 §1); pol is cleared so it
+// no longer holds the credential. The resolved PIN is handed to Unlock exactly
+// once, which consumes and zeroizes it. The deferred clear covers the paths
+// Unlock never sees the slice (resolve/transport-construction failure) and is
 // idempotent after Unlock's own zeroization. No other copy is made here.
 //
 // Errors never carry the PIN or session material (enforced for the opal layer
@@ -44,8 +56,14 @@ func unlockSED(pol *policy.Policy, newTransports func() ([]opal.Transport, error
 		return nil
 	}
 
-	pin := []byte(pol.SEDPIN)
-	pol.SEDPIN = nil // pol must not remain a holder of the credential
+	// The source takes ownership of pol.SEDPIN; clear the field so pol no longer
+	// holds the credential.
+	src := newCredentialSource([]byte(pol.SEDPIN))
+	pol.SEDPIN = nil
+	pin, err := src.Resolve(credential.Env{})
+	if err != nil {
+		return fmt.Errorf("sed unlock failed: credential %s: %w", src.Kind(), err)
+	}
 	defer clear(pin)
 
 	transports, err := newTransports()
