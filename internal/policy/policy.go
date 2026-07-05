@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 )
 
@@ -215,8 +216,13 @@ func (p *Policy) CheckReleaseReady() error {
 	return errors.Join(errs...)
 }
 
-// isTestFixturePath reports whether an ESP-relative path is the virtual-test boot
-// fixture (EFI/TEST/...), which must never be a release boot target.
-func isTestFixturePath(path string) bool {
-	return strings.HasPrefix(strings.ToUpper(path), "EFI/TEST/")
+// isTestFixturePath reports whether an ESP-relative path resolves to the
+// virtual-test boot fixture (EFI/TEST/...), which must never be a release boot
+// target. It normalizes the path the way the boot loader would resolve it — the
+// go-boot ESP filesystem maps "/"→"\" for EFI_FILE_PROTOCOL.Open and does not
+// clean the name — so separator, ".", "//", and leading-slash variants
+// (e.g. `.\EFI\\TEST\`, `/EFI/TEST/`) cannot slip the fixture past the gate.
+func isTestFixturePath(p string) bool {
+	clean := path.Clean("/" + strings.ReplaceAll(p, `\`, "/")) // abs form; collapses ., .., //
+	return strings.HasPrefix(strings.ToUpper(clean), "/EFI/TEST/")
 }
