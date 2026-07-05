@@ -9,6 +9,6 @@ import "fmt"
 // -tags trustbroker, so it stays out of default and release builds until its
 // acceptance ADR lands. A policy that uses pba-override validation therefore
 // refuses to boot on a normal build rather than silently downgrading.
-func verifyAndLoadOverride(string) error {
+func verifyAndLoadOverride(string, bool) error {
 	return fmt.Errorf("%s: pba-override not built (needs -tags trustbroker)", chainloadFail)
 }
