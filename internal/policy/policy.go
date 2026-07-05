@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ValidationMode is how a boot entry's image is validated before it is started.
@@ -182,4 +183,40 @@ func (p *Policy) CheckSecureBoot(enforcing bool) error {
 		return ErrSecureBootRequired
 	}
 	return nil
+}
+
+// CheckReleaseReady reports whether this policy is safe to embed in a RELEASE
+// build. It is deliberately stricter than Parse: the development defaults that
+// Parse accepts — Secure Boot not required, sed_unlock "none", a test-fixture
+// boot target — are legitimate for virtual testing but must never ship, because
+// a shipped policy is baked into the signed, measured artifact and cannot be
+// changed at runtime.
+//
+// It is NOT part of the boot path; the release gate (Taskfile check-release-policy)
+// calls it so an unsafe default cannot silently reach a release artifact. All
+// violations are joined so a release engineer sees every problem at once.
+//
+// Note on require_secure_boot: an *absent* field parses to false (the Go zero
+// value), which this treats as unsafe — the opposite of a permissive default.
+// Only an explicit true passes.
+func (p *Policy) CheckReleaseReady() error {
+	var errs []error
+	if !p.RequireSecureBoot {
+		errs = append(errs, errors.New(`require_secure_boot must be true (absent or false is unsafe: firmware-mode validation does nothing when Secure Boot is off)`))
+	}
+	if p.SEDUnlock == SEDUnlockNone {
+		errs = append(errs, errors.New(`sed_unlock must not be "none" (a release must never silently skip the SED unlock)`))
+	}
+	for _, e := range p.Entries {
+		if isTestFixturePath(e.Path) {
+			errs = append(errs, fmt.Errorf("entry %q targets test-fixture path %q — not for a release build", e.Name, e.Path))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// isTestFixturePath reports whether an ESP-relative path is the virtual-test boot
+// fixture (EFI/TEST/...), which must never be a release boot target.
+func isTestFixturePath(path string) bool {
+	return strings.HasPrefix(strings.ToUpper(path), "EFI/TEST/")
 }

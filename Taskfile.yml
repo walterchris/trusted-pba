@@ -217,13 +217,9 @@ tasks:
       - test/qemu/override-pcr.sh {{.BIN}}/{{.APP}}-overridetest.efi {{.BIN}}/{{.APP}}.efi {{.BIN}}/tpmread.efi
 
   check-release-policy:
-    desc: 'Release gate: fail if the DEFAULT embedded policy ships sed_unlock "none" (release.yml runs this; PR CI does not — the dev default is legitimately "none" until real auth lands)'
+    desc: 'Release gate: fail unless the DEFAULT embedded policy is release-ready (Secure Boot required, SED unlock not skipped, no test-fixture target). release.yml runs this; PR CI does not — the dev default is legitimately not release-ready until real auth lands.'
     cmds:
-      - >-
-        python3 -c 'import json,sys;
-        p = json.load(open("internal/policy/policy.json"));
-        sys.exit("RELEASE BLOCKED: default embedded policy has sed_unlock \"none\" — a release artifact must never silently skip the SED unlock"
-        if p.get("sed_unlock", "required") == "none" else 0)'
+      - go run ./cmd/release-policy-check internal/policy/policy.json
 
   test:
     desc: Run host Go tests
