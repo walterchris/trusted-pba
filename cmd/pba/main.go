@@ -112,7 +112,16 @@ func run(pol *policy.Policy, enforcing bool) error {
 		return fmt.Errorf("open ESP: %w", err)
 	}
 	env := credential.Env{Console: newConsolePrompter(), Files: root}
-	if err := unlockSED(pol, env, newUEFITransports, out); err != nil {
+	// Default to the proven firmware Storage-Security carrier so the raw unlock
+	// path is unchanged. sedutil-pbkdf2 needs the drive serial as its PBKDF2 salt,
+	// which only the NVMe-passthru carrier exposes via Serial() (credential.Serialer);
+	// so switch carriers just for that derive stage (A4b, #104). SEDCredential is nil
+	// for SEDUnlockNone, so guard it.
+	newTransports := newUEFITransports
+	if pol.SEDCredential != nil && pol.SEDCredential.Derive == policy.DeriveSedutilPBKDF2 {
+		newTransports = newNVMeTransports
+	}
+	if err := unlockSED(pol, env, newTransports, out); err != nil {
 		return err
 	}
 	entry, err := pol.Select()
@@ -132,6 +141,25 @@ func newUEFITransports() ([]opal.Transport, error) {
 		return nil, err
 	}
 	// Widen []*transport.UEFI to []opal.Transport (Go has no covariant slice
+	// conversion, so the element-wise loop is unavoidable).
+	out := make([]opal.Transport, len(ts))
+	for i, t := range ts {
+		out[i] = t
+	}
+	return out, nil
+}
+
+// newNVMeTransports adapts transport.NewAllNVMe to the constructor shape unlockSED
+// takes: one opal.Transport per NVMe pass-thru device (the caller selects the Opal
+// SED). It is used for the sedutil-pbkdf2 derive stage, whose PBKDF2 salt is the
+// drive serial this carrier exposes via Serial() (credential.Serialer). It fails
+// closed when the firmware exposes no NVMe pass-thru device.
+func newNVMeTransports() ([]opal.Transport, error) {
+	ts, err := transport.NewAllNVMe()
+	if err != nil {
+		return nil, err
+	}
+	// Widen []*transport.NVMe to []opal.Transport (Go has no covariant slice
 	// conversion, so the element-wise loop is unavoidable).
 	out := make([]opal.Transport, len(ts))
 	for i, t := range ts {
