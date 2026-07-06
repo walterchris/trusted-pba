@@ -1,10 +1,16 @@
 # ADR-0011: Pluggable SED unlock credential sources
 
 ## Status
-Proposed — pending the §5.3/§23 human gate (security-critical behavior change).
-Supersedes the "MVP PIN source" portion of [ADR-0009](ADR-0009-boot-path-sed-unlock.md);
-ADR-0009's policy gate (`sed_unlock` required/none, fail-closed flow) stands
-unchanged.
+Accepted (2026-07-06) — the §5.3/§23 human gate (security-critical behavior change) was
+satisfied by the Security/Release Owner merging the A2 PR (**#99**) after two independent
+reviews (go-reviewer + security-review-agent, both APPROVE), recorded in
+`evidence/security-review-records/2026-07-06-console-credential-99.md`. Landed in stages:
+**A1** (#98) the `credential.Source` abstraction (routing the compiled-in `policy-pin`
+through it); **A2** (#99) the `sed_credential` schema + the first interactive source
+(`console`). Remaining Milestone-1 items: **A3** `keyfile` (#100) and the **A4**
+`sedutil-pbkdf2` derive (#104). Supersedes the "MVP PIN source" portion of
+[ADR-0009](ADR-0009-boot-path-sed-unlock.md); ADR-0009's policy gate (`sed_unlock`
+required/none, fail-closed flow) stands unchanged.
 
 ## Context
 ADR-0009 wired the SED unlock into the boot path but hard-wired the credential
