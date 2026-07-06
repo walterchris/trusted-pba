@@ -11,6 +11,9 @@ longer purely additive). Amended 2026-06-11: pin bumped to `v1.6.2-tpba.4`
 (commit `6db0670`, full-codebase-audit follow-ups; see *Amendment 2026-06-11*
 below). Amended 2026-06-28: pin bumped to `v1.6.2-tpba.5` (handle-aware Storage
 Security for the first real-hardware bring-up; see *Amendment 2026-06-28* below).
+Amended 2026-07-06: pin bumped to `v1.6.2-tpba.6` (NVMe PassThru transport +
+Identify-Controller serial read + ConnectController; for the A4 sedutil-PBKDF2
+salt #104 and serial-based drive targeting #81; see *Amendment 2026-07-06* below).
 
 ## Context
 go-boot v1.6.2 wraps only a **fixed set** of UEFI protocols/services (graphics,
@@ -185,6 +188,31 @@ verified separately), and the #27 dependency scan covers the fork's transitive s
 Trusted PBA QEMU mock-Opal matrix still passes against the bump (the EDK2 mock is
 single-handle, so the host-side selection collapses to picking that one); the
 published tag's `go.sum` hash recorded.
+
+### Amendment 2026-07-06 — pin bumped to `v1.6.2-tpba.6`
+
+Adds `EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL` (`uefi/nvmepassthru.go`: handle
+enumeration + per-handle resolution, NVMe **Security Send/Receive** as an
+alternative Opal carrier, and **Identify Controller** → `SerialNumber()` returning
+the drive's 20-byte serial) and `ConnectController`/`DisconnectController`
+(`uefi/protocol.go`). Motivation: the **A4 `sedutil-pbkdf2` credential derivation
+salt is exactly the 20-byte NVMe serial** (#104), and serial-based **drive
+targeting** (#81) needs the same; the NVMe-passthru carrier is the README's
+"NVMe PassThru transport" (firmware whose Storage-Security mediation is
+unreliable).
+
+**Still additive.** New files/wrappers only, reusing the existing admin-queue
+`submit()` and `LocateHandleBuffer`/`HandleProtocol`; no new upstream-file edit
+beyond the three carried since `tpba.3`/`tpba.4` (`uefi.s`, `path.go`, `error.go`).
+
+**Security impact:** the new surface is NVMe admin-command submission (Security
+Send/Receive + read-only Identify) and controller (dis)connect. `SerialNumber()`
+reads device-descriptor data — the serial is **not secret** (it is used only as a
+public salt). None of it is wired into the boot path by this bump alone (A4 wires
+the salt; the NVMe carrier is not yet selected), so the pin bump changes no runtime
+behavior. Pinned by tag + `go.sum` hash (published-tag hash recorded). No new
+external/indirect deps beyond the `tpba.5` set (first-party fork code); the #27
+scan set is unchanged. R-006 unchanged.
 
 ## Alternatives Considered
 - **In-repo `unsafe`+asm UEFI-call primitive** — keeps everything in our tree but
