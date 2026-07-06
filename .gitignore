@@ -2,10 +2,12 @@
 /bin/
 /build/
 /dist/
-/pba                           # stray `go build ./cmd/pba` output (the build targets bin/)
+# stray `go build ./cmd/pba` output (the build targets bin/)
+/pba
 /trusted-pba
 *.efi
-!test/fixtures/**/*.efi        # committed test fixtures are intentional
+# committed test fixtures are intentional
+!test/fixtures/**/*.efi
 
 # Go
 /vendor/
