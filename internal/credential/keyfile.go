@@ -14,13 +14,31 @@ var errFilesUnavailable = errors.New("no filesystem available to read the keyfil
 var errKeyFileEmpty = errors.New("keyfile is empty")
 
 // keyfile is the file-backed Source (ADR-0011 §4): it reads the unlock seed from a
-// file on the boot volume / ESP (env.Files) at a fixed path. The secret lives at
-// rest on the volume — a low-assurance, operational-simplicity source (ADR-0011
-// §4/§Security Impact: the key stays extractable from the volume). It fails closed
-// on an absent filesystem, a read error, or an empty file, and zeroizes any buffer
-// it holds on the error paths (the caller owns and zeroizes the returned bytes on
-// success). It never logs the key bytes; errors carry only the stage and the path
-// (a path is not secret).
+// file on the boot volume / ESP (env.Files) at a fixed path.
+//
+// SECURITY MODEL — read before deploying:
+//   - The file content IS the credential, in cleartext. There is NO authenticity or
+//     integrity check on the file (no signature/hash/trust-store): the DRIVE
+//     authenticates it — a wrong or tampered keyfile makes StartSession fail
+//     (NOT_AUTHORIZED) and the boot fails closed, so an invalid keyfile is never a
+//     bypass, only a denial.
+//   - Assurance therefore equals the CONFIDENTIALITY of where the file lives: an
+//     attacker who can read the volume simply reads the key. On the ESP — the boot
+//     volume that travels WITH the machine — that is low-assurance, roughly a
+//     compiled-in PIN against a physical attacker, and it does NOT defend the
+//     evil-maid (threat-model §6.2 / R-002). keyfile gains real value only on
+//     SEPARATE REMOVABLE MEDIA the operator carries (USB / GUID-tagged partition —
+//     deferred, needs go-boot volume enumeration, #100) or as one factor in MFA
+//     (keyfile + a console PIN, ADR-0011 §1). For measured-boot integrity binding
+//     (release the key only if the boot chain is unmodified) use tpm-pcr-sealed
+//     (Milestone 2), not keyfile.
+//   - Bytes are used exactly as stored (no trimming): a trailing newline becomes
+//     part of the credential. Provision the file with the exact key bytes.
+//
+// It fails closed on an absent filesystem, a read error, or an empty file, and
+// zeroizes any buffer it holds on the error paths (the caller owns and zeroizes the
+// returned bytes on success). It never logs the key bytes; errors carry only the
+// stage and the path (a path is not secret).
 type keyfile struct{ path string }
 
 // NewKeyFile returns the file-backed Source reading the unlock seed from path on
