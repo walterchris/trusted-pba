@@ -18,7 +18,10 @@ import (
 const testPIN = "correct horse"
 
 func requiredPolicy(pin string) *policy.Policy {
-	return &policy.Policy{SEDUnlock: policy.SEDUnlockRequired, SEDPIN: policy.PIN(pin)}
+	return &policy.Policy{
+		SEDUnlock:     policy.SEDUnlockRequired,
+		SEDCredential: &policy.Credential{Source: policy.CredentialPolicyPIN, PIN: policy.PIN(pin), Derive: policy.DeriveRaw},
+	}
 }
 
 // mockConstructor returns a transports constructor serving the given MockTPer (as
@@ -40,7 +43,7 @@ func TestUnlockSEDNoneSkipsLoudly(t *testing.T) {
 		t.Fatal("sed_unlock none must not construct a transport")
 		return nil, nil
 	}
-	if err := unlockSED(pol, construct, &buf); err != nil {
+	if err := unlockSED(pol, credential.Env{}, construct, &buf); err != nil {
 		t.Fatalf("unlockSED: %v", err)
 	}
 	// Skipping must be loud: an explicit policy statement, never silent.
@@ -54,10 +57,10 @@ func TestUnlockSEDRequiredHappyPath(t *testing.T) {
 	var buf bytes.Buffer
 	m := opal.NewMockTPer([]byte(testPIN))
 	pol := requiredPolicy(testPIN)
-	pinBacking := []byte(pol.SEDPIN) // same backing array, not a copy
+	pinBacking := []byte(pol.SEDCredential.PIN) // same backing array, not a copy
 
 	construct, calls := mockConstructor(m)
-	if err := unlockSED(pol, construct, &buf); err != nil {
+	if err := unlockSED(pol, credential.Env{}, construct, &buf); err != nil {
 		t.Fatalf("unlockSED: %v", err)
 	}
 	if m.Locked() || !m.MBRDone() {
@@ -77,10 +80,10 @@ func TestUnlockSEDFailsClosedOnWrongPIN(t *testing.T) {
 	var buf bytes.Buffer
 	m := opal.NewMockTPer([]byte(testPIN))
 	pol := requiredPolicy("wrong pin")
-	pinBacking := []byte(pol.SEDPIN)
+	pinBacking := []byte(pol.SEDCredential.PIN)
 
 	construct, calls := mockConstructor(m)
-	err := unlockSED(pol, construct, &buf)
+	err := unlockSED(pol, credential.Env{}, construct, &buf)
 	if err == nil {
 		t.Fatal("unlockSED with wrong PIN: want error, got nil")
 	}
@@ -108,10 +111,10 @@ func TestUnlockSEDFailsClosedOnTransportFault(t *testing.T) {
 	m := opal.NewMockTPer([]byte(testPIN))
 	m.Inject(opal.FaultTimeout)
 	pol := requiredPolicy(testPIN)
-	pinBacking := []byte(pol.SEDPIN)
+	pinBacking := []byte(pol.SEDCredential.PIN)
 
 	construct, _ := mockConstructor(m)
-	if err := unlockSED(pol, construct, &buf); err == nil {
+	if err := unlockSED(pol, credential.Env{}, construct, &buf); err == nil {
 		t.Fatal("unlockSED with transport fault: want error, got nil")
 	}
 	if strings.Contains(buf.String(), "sed unlock ok") {
@@ -131,10 +134,10 @@ func TestUnlockSEDFailsClosedOnPartialUnlock(t *testing.T) {
 	m := opal.NewMockTPer([]byte(testPIN))
 	m.Inject(opal.FaultMBRDone)
 	pol := requiredPolicy(testPIN)
-	pinBacking := []byte(pol.SEDPIN)
+	pinBacking := []byte(pol.SEDCredential.PIN)
 
 	construct, _ := mockConstructor(m)
-	err := unlockSED(pol, construct, &buf)
+	err := unlockSED(pol, credential.Env{}, construct, &buf)
 	if err == nil {
 		t.Fatal("unlockSED with failed MBRDone: want error, got nil")
 	}
@@ -160,13 +163,13 @@ func TestUnlockSEDFailsClosedWithoutCarrier(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
 	pol := requiredPolicy(testPIN)
-	pinBacking := []byte(pol.SEDPIN)
+	pinBacking := []byte(pol.SEDCredential.PIN)
 
 	construct := func() ([]opal.Transport, error) {
 		_, err := transport.NewAll()
 		return nil, err
 	}
-	err := unlockSED(pol, construct, &buf)
+	err := unlockSED(pol, credential.Env{}, construct, &buf)
 	if !errors.Is(err, transport.ErrUnavailable) {
 		t.Fatalf("want transport.ErrUnavailable, got %v", err)
 	}
@@ -187,10 +190,10 @@ func TestUnlockSEDSelectsResponsiveSED(t *testing.T) {
 	dead.Inject(opal.FaultTimeout) // Discovery fails -> must be skipped
 	sed := opal.NewMockTPer([]byte(testPIN))
 	pol := requiredPolicy(testPIN)
-	pinBacking := []byte(pol.SEDPIN)
+	pinBacking := []byte(pol.SEDCredential.PIN)
 
 	construct := func() ([]opal.Transport, error) { return []opal.Transport{dead, sed}, nil }
-	if err := unlockSED(pol, construct, &buf); err != nil {
+	if err := unlockSED(pol, credential.Env{}, construct, &buf); err != nil {
 		t.Fatalf("unlockSED: %v", err)
 	}
 	if sed.Locked() || !sed.MBRDone() {
@@ -216,10 +219,10 @@ func TestUnlockSEDNoResponsiveSEDFailsClosed(t *testing.T) {
 	d2 := opal.NewMockTPer([]byte(testPIN))
 	d2.Inject(opal.FaultTimeout)
 	pol := requiredPolicy(testPIN)
-	pinBacking := []byte(pol.SEDPIN)
+	pinBacking := []byte(pol.SEDCredential.PIN)
 
 	construct := func() ([]opal.Transport, error) { return []opal.Transport{d1, d2}, nil }
-	err := unlockSED(pol, construct, &buf)
+	err := unlockSED(pol, credential.Env{}, construct, &buf)
 	if err == nil {
 		t.Fatal("want error when no carrier is an Opal SED, got nil")
 	}
@@ -246,11 +249,11 @@ func TestUnlockSEDSkipsNonTargetOpalDrive(t *testing.T) {
 	decoy.SetLockState(false, false)
 	sed := opal.NewMockTPer([]byte(testPIN)) // the locked SED (default lock state)
 	pol := requiredPolicy(testPIN)
-	pinBacking := []byte(pol.SEDPIN)
+	pinBacking := []byte(pol.SEDCredential.PIN)
 
 	// decoy is enumerated first — the old "first Opal responder" logic picked it.
 	construct := func() ([]opal.Transport, error) { return []opal.Transport{decoy, sed}, nil }
-	if err := unlockSED(pol, construct, &buf); err != nil {
+	if err := unlockSED(pol, credential.Env{}, construct, &buf); err != nil {
 		t.Fatalf("unlockSED: %v", err)
 	}
 	if sed.Locked() || !sed.MBRDone() {
@@ -289,17 +292,19 @@ func TestUnlockSEDFailsClosedOnResolveError(t *testing.T) {
 	// other (parallel) unlockSED tests read.
 	var buf bytes.Buffer
 	pol := requiredPolicy(testPIN)
-	pinBacking := []byte(pol.SEDPIN)
+	pinBacking := []byte(pol.SEDCredential.PIN)
 
 	orig := newCredentialSource
 	t.Cleanup(func() { newCredentialSource = orig })
-	newCredentialSource = func(pin []byte) credential.Source { return &failingSource{pin: pin} }
+	newCredentialSource = func(cred *policy.Credential) (credential.Source, error) {
+		return &failingSource{pin: []byte(cred.PIN)}, nil
+	}
 
 	construct := func() ([]opal.Transport, error) {
 		t.Fatal("resolve failure must not construct a transport")
 		return nil, nil
 	}
-	err := unlockSED(pol, construct, &buf)
+	err := unlockSED(pol, credential.Env{}, construct, &buf)
 	if !errors.Is(err, errResolve) {
 		t.Fatalf("want wrapped resolve error, got %v", err)
 	}
@@ -315,13 +320,110 @@ func TestUnlockSEDFailsClosedOnResolveError(t *testing.T) {
 	assertPINConsumed(t, pol, pinBacking)
 }
 
+// consolePolicy is a required policy whose credential source is the interactive
+// console (no compiled-in PIN), with the given derive.
+func consolePolicy(derive policy.Derive) *policy.Policy {
+	return &policy.Policy{
+		SEDUnlock:     policy.SEDUnlockRequired,
+		SEDCredential: &policy.Credential{Source: policy.CredentialConsole, Derive: derive},
+	}
+}
+
+// stringPrompter is a Prompter that returns a fixed passphrase once.
+type stringPrompter struct {
+	pass  string
+	calls int
+}
+
+func (p *stringPrompter) Passphrase(string) ([]byte, error) {
+	p.calls++
+	return []byte(p.pass), nil
+}
+
+// TestUnlockSEDConsoleSourceUnlocks proves the console source is selected from
+// the policy, threaded the env's Prompter, and drives the same unlock as the
+// policy-pin path (the resolved passphrase is the raw credential).
+func TestUnlockSEDConsoleSourceUnlocks(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	m := opal.NewMockTPer([]byte(testPIN))
+	pol := consolePolicy(policy.DeriveRaw)
+	prompter := &stringPrompter{pass: testPIN}
+
+	construct, _ := mockConstructor(m)
+	if err := unlockSED(pol, credential.Env{Console: prompter}, construct, &buf); err != nil {
+		t.Fatalf("unlockSED: %v", err)
+	}
+	if m.Locked() || !m.MBRDone() {
+		t.Errorf("drive locked=%v mbrDone=%v, want unlocked with MBRDone", m.Locked(), m.MBRDone())
+	}
+	if prompter.calls != 1 {
+		t.Errorf("prompter called %d times, want 1", prompter.calls)
+	}
+	if !strings.Contains(buf.String(), "TRUSTED-PBA: sed unlock ok") {
+		t.Errorf("missing success marker; output: %q", buf.String())
+	}
+}
+
+// TestUnlockSEDConsoleFailsClosedWithoutConsole proves the console source fails
+// closed when the platform provides no console (nil Prompter), never constructs
+// a transport, and never emits the success marker.
+func TestUnlockSEDConsoleFailsClosedWithoutConsole(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	pol := consolePolicy(policy.DeriveRaw)
+
+	construct := func() ([]opal.Transport, error) {
+		t.Fatal("absent console must not construct a transport")
+		return nil, nil
+	}
+	err := unlockSED(pol, credential.Env{}, construct, &buf)
+	if err == nil {
+		t.Fatal("console source with no console: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "sed unlock failed") || !strings.Contains(err.Error(), "console") {
+		t.Errorf("error %q must carry the stage marker and the source kind", err)
+	}
+	if strings.Contains(buf.String(), "sed unlock ok") {
+		t.Errorf("must not emit the success marker; output: %q", buf.String())
+	}
+}
+
+// TestUnlockSEDDeriveNotImplementedFailsClosed proves the sedutil-pbkdf2 derive
+// stage (A4, #104) fails closed at unlock time: the seed is resolved but the
+// derive is not implemented, so no credential reaches the drive and no success
+// marker is emitted. The PIN backing is still zeroized.
+func TestUnlockSEDDeriveNotImplementedFailsClosed(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	pol := requiredPolicy(testPIN)
+	pol.SEDCredential.Derive = policy.DeriveSedutilPBKDF2
+	pinBacking := []byte(pol.SEDCredential.PIN)
+
+	construct := func() ([]opal.Transport, error) {
+		t.Fatal("unimplemented derive must not construct a transport")
+		return nil, nil
+	}
+	err := unlockSED(pol, credential.Env{}, construct, &buf)
+	if err == nil {
+		t.Fatal("sedutil-pbkdf2 derive: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "sed unlock failed") || !strings.Contains(err.Error(), "derive") {
+		t.Errorf("error %q must carry the stage marker and name the derive stage", err)
+	}
+	if strings.Contains(buf.String(), "sed unlock ok") {
+		t.Errorf("must not emit the success marker; output: %q", buf.String())
+	}
+	assertPINConsumed(t, pol, pinBacking)
+}
+
 // assertPINConsumed asserts the wiring's PIN contract: the policy no longer
 // holds the credential and the original backing bytes are zeroized — on success
 // and on every failure path.
 func assertPINConsumed(t *testing.T, pol *policy.Policy, backing []byte) {
 	t.Helper()
-	if pol.SEDPIN != nil {
-		t.Error("policy SEDPIN must be cleared after unlockSED")
+	if pol.SEDCredential != nil && pol.SEDCredential.PIN != nil {
+		t.Error("policy SEDCredential.PIN must be cleared after unlockSED")
 	}
 	for i, b := range backing {
 		if b != 0 {

@@ -18,7 +18,7 @@ func TestParseValid(t *testing.T) {
 }
 
 func TestParseFailsClosed(t *testing.T) {
-	bad := map[string]string{
+	bad := map[string]string{ //nolint:gosec // G101 false positive: JSON fixtures embed the shared-spec test PIN, not a real credential
 		"malformed json":     `{`,
 		"empty object":       `{}`,
 		"no entries":         `{"sed_unlock":"none","entries":[]}`,
@@ -29,13 +29,19 @@ func TestParseFailsClosed(t *testing.T) {
 		"wrong type":         `{"require_secure_boot":"yes","entries":[]}`,
 		"unknown on_error":   `{"on_error":"explode","sed_unlock":"none","entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 		// SED unlock gate: only the explicit values are accepted; "required"
-		// (incl. absent = required) demands a PIN in the MVP policy-as-PIN-source
-		// model, and "none" must not embed a stray credential.
-		"unknown sed_unlock":      `{"sed_unlock":"maybe","entries":[{"name":"x","path":"a","validation":"pba"}]}`,
-		"required without pin":    `{"sed_unlock":"required","entries":[{"name":"x","path":"a","validation":"pba"}]}`,
-		"absent unlock means req": `{"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
-		"none with pin":           `{"sed_unlock":"none","sed_pin":"correct horse","entries":[{"name":"x","path":"a","validation":"pba"}]}`,
-		"sed_pin wrong json type": `{"sed_unlock":"required","sed_pin":1,"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		// (incl. absent = required) demands a well-formed sed_credential
+		// (ADR-0011), and "none" must not embed a credential.
+		"unknown sed_unlock":          `{"sed_unlock":"maybe","entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"required without credential": `{"sed_unlock":"required","entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"absent unlock means req":     `{"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"none with credential":        `{"sed_unlock":"none","sed_credential":{"source":"policy-pin","pin":"correct horse"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"unknown credential source":   `{"sed_unlock":"required","sed_credential":{"source":"telepathy"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"policy-pin without pin":      `{"sed_unlock":"required","sed_credential":{"source":"policy-pin"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"policy-pin empty pin":        `{"sed_unlock":"required","sed_credential":{"source":"policy-pin","pin":""},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"console with pin":            `{"sed_unlock":"required","sed_credential":{"source":"console","pin":"correct horse"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"unknown derive":              `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"scrypt"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"credential unknown field":    `{"sed_unlock":"required","sed_credential":{"source":"console","extra":1},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"pin wrong json type":         `{"sed_unlock":"required","sed_credential":{"source":"policy-pin","pin":1},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 	}
 	for name, in := range bad {
 		if _, err := Parse([]byte(in)); err == nil {
@@ -68,19 +74,36 @@ func TestParseOnError(t *testing.T) {
 }
 
 func TestParseSEDUnlock(t *testing.T) {
-	// Explicit "required" with a PIN: the PIN bytes are carried for the boot
-	// path (MVP compiled-in credential, shared-spec test value; ADR-0009).
-	p, err := Parse([]byte(`{"sed_unlock":"required","sed_pin":"correct horse","entries":[{"name":"x","path":"a","validation":"pba"}]}`))
+	// Explicit "required" with a policy-pin credential: the PIN bytes are carried
+	// for the boot path (compiled-in debug credential, shared-spec test value;
+	// ADR-0011 §5). derive defaults to raw.
+	p, err := Parse([]byte(`{"sed_unlock":"required","sed_credential":{"source":"policy-pin","pin":"correct horse"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if p.SEDUnlock != SEDUnlockRequired || string(p.SEDPIN) != "correct horse" {
-		t.Errorf("got sed_unlock=%q pin len %d, want required with the test PIN", p.SEDUnlock, len(p.SEDPIN))
+	if p.SEDUnlock != SEDUnlockRequired || p.SEDCredential == nil {
+		t.Fatalf("got sed_unlock=%q credential=%v, want required with a credential", p.SEDUnlock, p.SEDCredential)
+	}
+	if p.SEDCredential.Source != CredentialPolicyPIN || string(p.SEDCredential.PIN) != "correct horse" {
+		t.Errorf("got source=%q pin len %d, want policy-pin with the test PIN", p.SEDCredential.Source, len(p.SEDCredential.PIN))
+	}
+	if p.SEDCredential.Derive != DeriveRaw {
+		t.Errorf("absent derive = %q, want %q (default)", p.SEDCredential.Derive, DeriveRaw)
+	}
+
+	// The console source carries no compiled-in secret; sedutil-pbkdf2 is accepted
+	// as a schema value (implemented in A4, #104).
+	p, err = Parse([]byte(`{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if p.SEDCredential.Source != CredentialConsole || len(p.SEDCredential.PIN) != 0 || p.SEDCredential.Derive != DeriveSedutilPBKDF2 {
+		t.Errorf("got %+v, want console/no-pin/sedutil-pbkdf2", p.SEDCredential)
 	}
 
 	// Absence = required (fail closed): the value must never silently become
-	// "none". With a PIN present the policy parses and is required.
-	p, err = Parse([]byte(`{"sed_pin":"correct horse","entries":[{"name":"x","path":"a","validation":"pba"}]}`))
+	// "none". With a credential present the policy parses and is required.
+	p, err = Parse([]byte(`{"sed_credential":{"source":"policy-pin","pin":"correct horse"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -88,13 +111,13 @@ func TestParseSEDUnlock(t *testing.T) {
 		t.Errorf("absent sed_unlock = %q, want %q (fail closed)", p.SEDUnlock, SEDUnlockRequired)
 	}
 
-	// Explicit "none" (no PIN) is the only way to skip the unlock.
+	// Explicit "none" (no credential) is the only way to skip the unlock.
 	p, err = Parse([]byte(`{"sed_unlock":"none","entries":[{"name":"x","path":"a","validation":"pba"}]}`))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	if p.SEDUnlock != SEDUnlockNone || len(p.SEDPIN) != 0 {
-		t.Errorf("got sed_unlock=%q pin len %d, want none without a PIN", p.SEDUnlock, len(p.SEDPIN))
+	if p.SEDUnlock != SEDUnlockNone || p.SEDCredential != nil {
+		t.Errorf("got sed_unlock=%q credential=%v, want none without a credential", p.SEDUnlock, p.SEDCredential)
 	}
 }
 
@@ -151,7 +174,7 @@ func TestCheckReleaseReady(t *testing.T) {
 		return &Policy{
 			RequireSecureBoot: true,
 			SEDUnlock:         SEDUnlockRequired,
-			SEDPIN:            PIN("x"),
+			SEDCredential:     &Credential{Source: CredentialConsole, Derive: DeriveRaw},
 			Entries:           []BootEntry{{Name: "os", Path: "EFI/Microsoft/Boot/bootmgfw.efi", Validation: Firmware}},
 		}
 	}
@@ -162,7 +185,8 @@ func TestCheckReleaseReady(t *testing.T) {
 	}{
 		{"production-safe", func(*Policy) {}, false},
 		{"secure boot not required", func(p *Policy) { p.RequireSecureBoot = false }, true},
-		{"sed_unlock none", func(p *Policy) { p.SEDUnlock = SEDUnlockNone; p.SEDPIN = nil }, true},
+		{"sed_unlock none", func(p *Policy) { p.SEDUnlock = SEDUnlockNone; p.SEDCredential = nil }, true},
+		{"policy-pin credential (debug source)", func(p *Policy) { p.SEDCredential = &Credential{Source: CredentialPolicyPIN, PIN: PIN("x")} }, true},
 		{"test-fixture target", func(p *Policy) { p.Entries[0].Path = "EFI/TEST/TESTAPP.EFI" }, true},
 		{"test-fixture target lowercase", func(p *Policy) { p.Entries[0].Path = "efi/test/testapp.efi" }, true},
 		{"test-fixture leading ./", func(p *Policy) { p.Entries[0].Path = "./EFI/TEST/TESTAPP.EFI" }, true},
@@ -183,20 +207,23 @@ func TestCheckReleaseReady(t *testing.T) {
 
 	// The dev default (parsed from an absent require_secure_boot) must be blocked:
 	// absent -> false -> unsafe, not a silent pass.
-	absent := &Policy{SEDUnlock: SEDUnlockRequired, SEDPIN: PIN("x"),
+	absent := &Policy{SEDUnlock: SEDUnlockRequired, SEDCredential: &Credential{Source: CredentialConsole},
 		Entries: []BootEntry{{Name: "os", Path: "EFI/BOOT/BOOTX64.EFI", Validation: Firmware}}}
 	if err := absent.CheckReleaseReady(); err == nil {
 		t.Error("absent require_secure_boot must be treated as unsafe (blocked), got nil")
 	}
 
-	// All three violations at once are reported together (errors.Join).
+	// All four violations at once are reported together (errors.Join): no Secure
+	// Boot, sed_unlock none, a test-fixture target, and the debug policy-pin
+	// source (kept here so "none" and "policy-pin" both surface).
 	all := &Policy{RequireSecureBoot: false, SEDUnlock: SEDUnlockNone,
-		Entries: []BootEntry{{Name: "t", Path: "EFI/TEST/TESTAPP.EFI", Validation: Firmware}}}
+		SEDCredential: &Credential{Source: CredentialPolicyPIN, PIN: PIN("x")},
+		Entries:       []BootEntry{{Name: "t", Path: "EFI/TEST/TESTAPP.EFI", Validation: Firmware}}}
 	err := all.CheckReleaseReady()
 	if err == nil {
 		t.Fatal("all-unsafe policy must fail")
 	}
-	for _, want := range []string{"require_secure_boot", "sed_unlock", "test-fixture"} {
+	for _, want := range []string{"require_secure_boot", "sed_unlock", "test-fixture", "policy-pin"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("joined error missing %q; got: %v", want, err)
 		}
@@ -207,7 +234,8 @@ func TestCheckReleaseReady(t *testing.T) {
 // an error, never crash on attacker-controlled policy bytes).
 func FuzzParse(f *testing.F) {
 	f.Add([]byte(`{"entries":[{"name":"x","path":"a","validation":"firmware"}]}`))
-	f.Add([]byte(`{"sed_unlock":"required","sed_pin":"correct horse","entries":[{"name":"x","path":"a","validation":"pba"}]}`))
+	f.Add([]byte(`{"sed_unlock":"required","sed_credential":{"source":"policy-pin","pin":"correct horse"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`))
+	f.Add([]byte(`{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`))
 	f.Add([]byte(`{`))
 	f.Add([]byte(``))
 	f.Fuzz(func(_ *testing.T, data []byte) {

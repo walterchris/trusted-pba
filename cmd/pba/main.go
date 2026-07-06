@@ -22,6 +22,7 @@ import (
 
 	"github.com/walterchris/go-boot/uefi"
 	"github.com/walterchris/go-boot/uefi/x64"
+	"github.com/walterchris/trusted-pba/internal/credential"
 	"github.com/walterchris/trusted-pba/internal/opal"
 	"github.com/walterchris/trusted-pba/internal/policy"
 	"github.com/walterchris/trusted-pba/internal/secureboot"
@@ -100,7 +101,11 @@ func run(pol *policy.Policy, enforcing bool) error {
 	if err := pol.CheckSecureBoot(enforcing); err != nil {
 		return fmt.Errorf("policy: %w", err)
 	}
-	if err := unlockSED(pol, newUEFITransports, out); err != nil {
+	// env carries the platform capabilities a credential source may need (the
+	// console Prompter for interactive passphrase entry). The console source
+	// fails closed if the capability is absent.
+	env := credential.Env{Console: newConsolePrompter()}
+	if err := unlockSED(pol, env, newUEFITransports, out); err != nil {
 		return err
 	}
 	entry, err := pol.Select()
