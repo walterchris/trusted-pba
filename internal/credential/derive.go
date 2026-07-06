@@ -9,6 +9,7 @@ import (
 	"crypto/pbkdf2"
 	"crypto/sha512"
 	"errors"
+	"fmt"
 )
 
 // SedutilPBKDF2 parameters, matching the sedutil build that provisioned the target
@@ -17,8 +18,7 @@ import (
 //
 // Confirmed against the sedutil source in use (A4/#104): PBKDF2-HMAC-SHA512,
 // 500000 iterations, 32-byte derived key. They are named constants (not literals)
-// because sedutil versions differ; a future policy/config knob can override them
-// without touching the algorithm. ADR-0011 §3 records an earlier SHA-1/75000
+// because sedutil versions differ. ADR-0011 §3 records an earlier SHA-1/75000
 // sketch that predates verifying the real source — the values here supersede it.
 const (
 	// SedutilPBKDF2Iterations is sedutil's PBKDF2 iteration count.
@@ -54,7 +54,7 @@ func SedutilPBKDF2(seed, salt []byte) ([]byte, error) {
 	}
 	key, err := pbkdf2.Key(sha512.New, string(seed), salt, SedutilPBKDF2Iterations, SedutilPBKDF2KeyLen)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("pbkdf2: %w", err)
 	}
 	return key, nil
 }
