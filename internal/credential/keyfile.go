@@ -21,7 +21,9 @@ var errKeyFileEmpty = errors.New("keyfile is empty")
 //     integrity check on the file (no signature/hash/trust-store): the DRIVE
 //     authenticates it — a wrong or tampered keyfile makes StartSession fail
 //     (NOT_AUTHORIZED) and the boot fails closed, so an invalid keyfile is never a
-//     bypass, only a denial.
+//     bypass, only a denial. (Verifying a signature over the keyfile against a
+//     built-in trust anchor — rejecting a planted/forged keyfile up front — is a
+//     planned enhancement, #107. Note that signing adds provenance, not secrecy.)
 //   - Assurance therefore equals the CONFIDENTIALITY of where the file lives: an
 //     attacker who can read the volume simply reads the key. On the ESP — the boot
 //     volume that travels WITH the machine — that is low-assurance, roughly a
