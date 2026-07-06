@@ -81,9 +81,11 @@ TPM-backed sources and is the main cost driver.
 3. **An optional derivation stage, orthogonal to the source.** Today the PIN is
    sent raw; several sources yield a *seed* that must be turned into the drive
    credential. `derive` ∈ {`raw` (default, current behavior), `sedutil-pbkdf2`
-   (`PBKDF2-HMAC-SHA1(seed, salt = drive serial padded to 20, 75000, 32B)` —
-   interoperable with sedutil/lumentum-provisioned drives)}. Any source composes
-   with either convention.
+   (`PBKDF2-HMAC-SHA512(seed, salt = the drive's 20-byte serial, 500000, 32B)` —
+   interoperable with sedutil/lumentum-provisioned drives)}. The parameters are
+   parameterized because sedutil versions differ; A4a KAT-verified these values
+   against the sedutil source in use (bit-identical to sedutil's `cf_pbkdf2_hmac`
+   + `cf_sha512`). Any source composes with either convention.
 4. **Source menu, grouped by factor and graded by pre-boot feasibility.** The
    hard filter is the runtime: we run pre-`ExitBootServices`, so we get whatever
    the firmware exposes as a protocol (keyboard text-input, filesystem, network,
