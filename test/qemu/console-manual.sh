@@ -36,6 +36,10 @@ echo "## Quit QEMU: Ctrl-A X"
 echo "############################################################"
 
 # virtio-blk ESP so the QEMU disk adds no competing Storage Security instance;
-# MockOpalDxe stays the sole SED. Run run-qemu.sh in the foreground (interactive).
-exec env OVMF_VARS="$WORK/vars.fd" DRIVER="$DRIVER" TESTAPP="$TESTAPP" QEMU_DISK_IF=virtio \
+# MockOpalDxe stays the sole SED. QEMU_INTERACTIVE=1 runs QEMU in the foreground so
+# it puts the terminal in raw mode (per-keystroke, no local echo) — required for the
+# console passphrase prompt; without it the TTY stays line-buffered and the input
+# arrives as a mangled burst on Enter.
+exec env OVMF_VARS="$WORK/vars.fd" DRIVER="$DRIVER" TESTAPP="$TESTAPP" \
+	QEMU_DISK_IF=virtio QEMU_INTERACTIVE=1 \
 	"$HERE/run-qemu.sh" "$PBA"
