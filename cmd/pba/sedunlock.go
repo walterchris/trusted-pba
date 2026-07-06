@@ -58,14 +58,19 @@ var newCredentialSource = func(cred *policy.Credential) (credential.Source, erro
 // pol.SEDCredential (ADR-0011 §2 — policy-pin over the compiled-in PIN, or the
 // interactive console source). The policy-pin bytes are handed to the source and
 // the credential's PIN field is cleared so pol no longer holds the credential.
-// The resolved seed is handed to Unlock exactly once, which consumes and
-// zeroizes it. The deferred clear covers the paths Unlock never sees the slice
-// (resolve/derive/transport-construction failure) and is idempotent after
-// Unlock's own zeroization. No other copy is made here.
+// The resolved seed is handed to Unlock exactly once (raw derive) or consumed by
+// the derive into a new key that Unlock then consumes (sedutil-pbkdf2); Unlock
+// zeroizes whichever slice it receives. Deferred clears cover the paths Unlock
+// never sees the slice (resolve/derive/transport/select failure) and are
+// idempotent after Unlock's own zeroization. No other copy is made here.
 //
-// derive (ADR-0011 §3) is applied after the source resolves the seed: raw sends
-// it unchanged (today's behavior); sedutil-pbkdf2 is not implemented until A4
-// (#104) and fails closed here.
+// derive (ADR-0011 §3) is applied AFTER the drive is selected, because the
+// sedutil-pbkdf2 salt is the selected drive's serial: raw sends the seed
+// unchanged (today's behavior); sedutil-pbkdf2 derives PBKDF2-HMAC-SHA512 over the
+// seed with the drive serial as salt. The serial comes from the selected
+// transport's optional credential.Serialer capability; today's Storage-Security
+// carrier does not implement it, so sedutil-pbkdf2 fails closed until the
+// NVMe-passthru carrier (A4b) supplies it.
 //
 // env carries the platform capabilities the source may need (the console
 // Prompter); the tamago entrypoint builds the real one, host tests inject a mock.
@@ -94,16 +99,11 @@ func unlockSED(pol *policy.Policy, env credential.Env, newTransports func() ([]o
 		return fmt.Errorf("sed unlock failed: credential: %w", err)
 	}
 	pol.SEDCredential.PIN = nil
-	pin, err := src.Resolve(env)
+	seed, err := src.Resolve(env)
 	if err != nil {
 		return fmt.Errorf("sed unlock failed: credential %s: %w", src.Kind(), err)
 	}
-	defer clear(pin)
-
-	pin, err = applyDerive(cred.Derive, pin)
-	if err != nil {
-		return fmt.Errorf("sed unlock failed: derive: %w", err)
-	}
+	defer clear(seed)
 
 	transports, err := newTransports()
 	if err != nil {
@@ -112,13 +112,24 @@ func unlockSED(pol *policy.Policy, env credential.Env, newTransports func() ([]o
 
 	// A multi-NVMe machine exposes one Storage Security carrier per drive; only the
 	// Opal SED answers Level-0 Discovery (the others fail with a device error). Pick
-	// it before authenticating — Unlock consumes and zeroizes the PIN, so it can run
-	// on exactly one transport. (Targeting a specific drive among several SEDs is a
-	// future refinement — ADR-0009.)
-	client, err := selectSED(transports, w)
+	// it before authenticating — Unlock consumes and zeroizes the credential, so it
+	// can run on exactly one transport. (Targeting a specific drive among several
+	// SEDs is a future refinement — ADR-0009.) The selected transport is also the
+	// source of the sedutil-pbkdf2 salt (the drive serial), so derive follows it.
+	client, selected, err := selectSED(transports, w)
 	if err != nil {
 		return fmt.Errorf("sed unlock failed: %w", err)
 	}
+
+	// derive after selection: raw returns the seed unchanged; sedutil-pbkdf2 returns
+	// a NEW key (and consumes the seed), so scrub whatever Unlock receives on every
+	// path even when Unlock never runs.
+	pin, err := applyDerive(cred.Derive, seed, selected)
+	if err != nil {
+		return fmt.Errorf("sed unlock failed: derive: %w", err)
+	}
+	defer clear(pin)
+
 	if err := client.Unlock(opal.AuthorityAdmin1, pin); err != nil {
 		return fmt.Errorf("sed unlock failed: %w", err)
 	}
@@ -127,26 +138,49 @@ func unlockSED(pol *policy.Policy, env credential.Env, newTransports func() ([]o
 }
 
 // applyDerive turns the source's resolved seed into the raw drive credential per
-// the policy's derive stage (ADR-0011 §3):
+// the policy's derive stage (ADR-0011 §3), given the selected drive's transport:
 //   - raw (the parse-normalized default): the seed is the credential — returned
-//     unchanged, so the caller's single deferred zeroization still covers it.
-//   - sedutil-pbkdf2: not implemented until A4 (#104); fails closed so a policy
-//     that selects it can never silently send the wrong (raw) credential to the
-//     drive. It returns no bytes; the caller's deferred clear zeroizes the seed.
-//
-// A4 HAZARD: the caller's `defer clear(pin)` snapshots the SEED slice (registered
-// before this reassignment). raw is safe because it returns that same backing.
-// When A4 makes this return a NEW derived buffer, A4 MUST zeroize that buffer
-// itself (the seed's deferred clear will not cover it) and add a test for it.
+//     unchanged (same backing), so the caller's deferred clear over the returned
+//     slice still zeroizes it (idempotent with the seed's own deferred clear).
+//   - sedutil-pbkdf2: PBKDF2-HMAC-SHA512 over the seed with the drive serial as
+//     salt (credential.SedutilPBKDF2). The serial comes from the selected
+//     transport's optional credential.Serialer capability. It returns a NEW key
+//     buffer distinct from the seed; it zeroizes the SEED here once consumed (the
+//     seed's own deferred clear then runs idempotently), and the caller wraps the
+//     returned key in its own deferred clear. Today's Storage-Security carrier
+//     does not implement Serialer, so this fails closed with a clear message
+//     until the NVMe-passthru carrier (A4b) supplies the serial — never silently
+//     sending the wrong (raw) credential to the drive.
 //
 // Any other value is a fail-closed error (Parse already rejects unknown values;
 // this guards the boot path regardless).
-func applyDerive(d policy.Derive, seed []byte) ([]byte, error) {
+//
+// It is a package variable so host tests can capture the derived buffer to assert
+// it is zeroized after unlockSED (mirroring the newCredentialSource seam);
+// production always uses applyDeriveImpl.
+var applyDerive = applyDeriveImpl
+
+func applyDeriveImpl(d policy.Derive, seed []byte, t opal.Transport) ([]byte, error) {
 	switch d {
 	case policy.DeriveRaw:
 		return seed, nil
 	case policy.DeriveSedutilPBKDF2:
-		return nil, errors.New("sedutil-pbkdf2 derive not implemented (A4, #104)")
+		s, ok := t.(credential.Serialer)
+		if !ok {
+			return nil, errors.New("drive serial unavailable: sedutil-pbkdf2 needs the NVMe-passthru carrier (A4b)")
+		}
+		salt, err := s.Serial()
+		if err != nil {
+			return nil, fmt.Errorf("drive serial: %w", err)
+		}
+		key, err := credential.SedutilPBKDF2(seed, salt)
+		if err != nil {
+			return nil, err
+		}
+		// The seed is consumed; scrub it now. The caller's deferred clear(seed)
+		// then runs idempotently, and the returned key gets its own deferred clear.
+		clear(seed)
+		return key, nil
 	default:
 		return nil, fmt.Errorf("unknown derive %q", d)
 	}
@@ -154,9 +188,11 @@ func applyDerive(d policy.Derive, seed []byte) ([]byte, error) {
 
 // selectSED returns a client for the locked Opal SED among the Storage Security
 // carriers — a drive reporting Opal SSC + locking-supported that is Locked with an
-// active Shadow MBR — and fails closed when none matches. Discovery is read-only and
-// touches no credential, so probing the non-target carriers (which error) is harmless.
-func selectSED(transports []opal.Transport, w io.Writer) (*opal.Client, error) {
+// active Shadow MBR — and the transport it was built on (so a salt-bearing derive
+// can query that drive's credential.Serialer), and fails closed when none matches.
+// Discovery is read-only and touches no credential, so probing the non-target
+// carriers (which error) is harmless.
+func selectSED(transports []opal.Transport, w io.Writer) (*opal.Client, opal.Transport, error) {
 	// A machine can expose several Opal-capable NVMe drives (e.g. a blank SSD that
 	// also answers Level-0 Discovery). The SED to unlock is the one that is locked
 	// with an active Shadow MBR — the drive the PBA was booted from. Selecting the
@@ -181,8 +217,8 @@ func selectSED(transports []opal.Transport, w io.Writer) (*opal.Client, error) {
 			continue
 		}
 		if d.Locked && d.MBREnabled {
-			return c, nil
+			return c, t, nil
 		}
 	}
-	return nil, fmt.Errorf("no locked Opal SED among %d storage security device(s)", len(transports))
+	return nil, nil, fmt.Errorf("no locked Opal SED among %d storage security device(s)", len(transports))
 }

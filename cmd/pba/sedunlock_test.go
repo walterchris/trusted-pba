@@ -390,32 +390,209 @@ func TestUnlockSEDConsoleFailsClosedWithoutConsole(t *testing.T) {
 	}
 }
 
-// TestUnlockSEDDeriveNotImplementedFailsClosed proves the sedutil-pbkdf2 derive
-// stage (A4, #104) fails closed at unlock time: the seed is resolved but the
-// derive is not implemented, so no credential reaches the drive and no success
-// marker is emitted. The PIN backing is still zeroized.
-func TestUnlockSEDDeriveNotImplementedFailsClosed(t *testing.T) {
+// TestUnlockSEDSedutilPBKDF2FailsClosedWithoutSerial proves the sedutil-pbkdf2
+// derive stage (A4a, #104) fails closed at unlock time with today's carrier: the
+// seed is resolved and the locked SED is selected, but the selected transport does
+// not implement credential.Serialer (the Storage-Security carrier; the real serial
+// arrives with the NVMe-passthru carrier, A4b). The derive therefore aborts with
+// the "serial unavailable" error, no credential reaches the drive, no success
+// marker is emitted, and the seed backing is still zeroized. The SED stays locked.
+func TestUnlockSEDSedutilPBKDF2FailsClosedWithoutSerial(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer
+	m := opal.NewMockTPer([]byte(testPIN)) // locked SED; does NOT implement Serialer
 	pol := requiredPolicy(testPIN)
 	pol.SEDCredential.Derive = policy.DeriveSedutilPBKDF2
 	pinBacking := []byte(pol.SEDCredential.PIN)
 
-	construct := func() ([]opal.Transport, error) {
-		t.Fatal("unimplemented derive must not construct a transport")
-		return nil, nil
-	}
+	construct, _ := mockConstructor(m)
 	err := unlockSED(pol, credential.Env{}, construct, &buf)
 	if err == nil {
-		t.Fatal("sedutil-pbkdf2 derive: want error, got nil")
+		t.Fatal("sedutil-pbkdf2 derive without serial: want error, got nil")
 	}
 	if !strings.Contains(err.Error(), "sed unlock failed") || !strings.Contains(err.Error(), "derive") {
 		t.Errorf("error %q must carry the stage marker and name the derive stage", err)
+	}
+	if !strings.Contains(err.Error(), "NVMe-passthru carrier (A4b)") {
+		t.Errorf("error %q must name the missing serial capability (A4b)", err)
+	}
+	if !m.Locked() {
+		t.Error("drive must stay locked when the derive fails closed")
 	}
 	if strings.Contains(buf.String(), "sed unlock ok") {
 		t.Errorf("must not emit the success marker; output: %q", buf.String())
 	}
 	assertPINConsumed(t, pol, pinBacking)
+}
+
+// serialMockTPer is a MockTPer that also implements credential.Serialer, modelling
+// the A4b NVMe-passthru carrier: it answers Level-0 Discovery like the SED and
+// supplies a fixed drive serial as the PBKDF2 salt.
+type serialMockTPer struct {
+	*opal.MockTPer
+	serial    []byte
+	serialErr error // when set, Serial fails closed (models a carrier read error)
+}
+
+func (m *serialMockTPer) Serial() ([]byte, error) {
+	if m.serialErr != nil {
+		return nil, m.serialErr
+	}
+	return m.serial, nil
+}
+
+// pbkdf2Serial is a fixed 20-byte space-padded serial (the PBKDF2 salt).
+var pbkdf2Serial = []byte("S3EMNX0M12345678    ")
+
+// TestApplyDeriveSedutilPBKDF2ZeroizesSeed proves applyDerive with sedutil-pbkdf2
+// returns the PBKDF2-HMAC-SHA512 key (matching credential.SedutilPBKDF2) in a NEW
+// buffer distinct from the seed and zeroizes the consumed seed in place.
+func TestApplyDeriveSedutilPBKDF2ZeroizesSeed(t *testing.T) {
+	t.Parallel()
+	seed := []byte(testPIN)
+	want, err := credential.SedutilPBKDF2([]byte(testPIN), pbkdf2Serial)
+	if err != nil {
+		t.Fatalf("reference derive: %v", err)
+	}
+	m := &serialMockTPer{MockTPer: opal.NewMockTPer(nil), serial: pbkdf2Serial}
+
+	got, err := applyDeriveImpl(policy.DeriveSedutilPBKDF2, seed, m)
+	if err != nil {
+		t.Fatalf("applyDerive: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("derived key = %x, want %x", got, want)
+	}
+	if &got[0] == &seed[0] {
+		t.Error("derived key must be a NEW buffer, not the seed backing")
+	}
+	for i, b := range seed {
+		if b != 0 {
+			t.Fatalf("seed not zeroized at byte %d after derive", i)
+		}
+	}
+}
+
+// TestUnlockSEDSedutilPBKDF2ZeroizesSeedAndDerived proves the full sedutil-pbkdf2
+// unlock path (A4a happy path via an A4b-like Serialer carrier) scrubs BOTH the
+// resolved seed and the derived key after unlockSED. It seeds the mock SED with the
+// derived credential so Unlock succeeds, captures the derived buffer via the
+// applyDerive seam, and asserts both buffers end zeroized.
+func TestUnlockSEDSedutilPBKDF2ZeroizesSeedAndDerived(t *testing.T) {
+	// Not parallel: swaps the package-level applyDerive seam.
+	var buf bytes.Buffer
+	derivedKey, err := credential.SedutilPBKDF2([]byte(testPIN), pbkdf2Serial)
+	if err != nil {
+		t.Fatalf("reference derive: %v", err)
+	}
+	m := &serialMockTPer{MockTPer: opal.NewMockTPer(derivedKey), serial: pbkdf2Serial}
+	pol := requiredPolicy(testPIN)
+	pol.SEDCredential.Derive = policy.DeriveSedutilPBKDF2
+	seedBacking := []byte(pol.SEDCredential.PIN)
+
+	var captured []byte
+	orig := applyDerive
+	t.Cleanup(func() { applyDerive = orig })
+	applyDerive = func(d policy.Derive, seed []byte, tr opal.Transport) ([]byte, error) {
+		out, err := orig(d, seed, tr)
+		captured = out // the derived buffer handed to Unlock
+		return out, err
+	}
+
+	construct := func() ([]opal.Transport, error) { return []opal.Transport{m}, nil }
+	if err := unlockSED(pol, credential.Env{}, construct, &buf); err != nil {
+		t.Fatalf("unlockSED: %v", err)
+	}
+	if m.Locked() || !m.MBRDone() {
+		t.Errorf("drive locked=%v mbrDone=%v, want unlocked with MBRDone", m.Locked(), m.MBRDone())
+	}
+	if !strings.Contains(buf.String(), "TRUSTED-PBA: sed unlock ok") {
+		t.Errorf("missing success marker; output: %q", buf.String())
+	}
+	assertZeroized(t, seedBacking, "seed")
+	if captured == nil {
+		t.Fatal("derive seam did not capture the derived buffer")
+	}
+	assertZeroized(t, captured, "derived key")
+}
+
+// TestUnlockSEDSedutilPBKDF2ZeroizesOnUnlockFailure proves the error path also
+// scrubs both buffers: the derive succeeds (Serialer present) but Unlock fails
+// (wrong derived credential on the drive), and unlockSED fails closed with the seed
+// and derived buffers both zeroized.
+func TestUnlockSEDSedutilPBKDF2ZeroizesOnUnlockFailure(t *testing.T) {
+	// Not parallel: swaps the package-level applyDerive seam.
+	var buf bytes.Buffer
+	// Seed the drive with a DIFFERENT credential so the derived key does not match.
+	m := &serialMockTPer{MockTPer: opal.NewMockTPer([]byte("not the derived key")), serial: pbkdf2Serial}
+	pol := requiredPolicy(testPIN)
+	pol.SEDCredential.Derive = policy.DeriveSedutilPBKDF2
+	seedBacking := []byte(pol.SEDCredential.PIN)
+
+	var captured []byte
+	orig := applyDerive
+	t.Cleanup(func() { applyDerive = orig })
+	applyDerive = func(d policy.Derive, seed []byte, tr opal.Transport) ([]byte, error) {
+		out, err := orig(d, seed, tr)
+		captured = out
+		return out, err
+	}
+
+	construct := func() ([]opal.Transport, error) { return []opal.Transport{m}, nil }
+	err := unlockSED(pol, credential.Env{}, construct, &buf)
+	if err == nil {
+		t.Fatal("wrong derived credential: want error, got nil")
+	}
+	if !m.Locked() {
+		t.Error("drive must stay locked after failed auth")
+	}
+	if strings.Contains(buf.String(), "sed unlock ok") {
+		t.Errorf("must not emit the success marker on failure; output: %q", buf.String())
+	}
+	assertZeroized(t, seedBacking, "seed")
+	if captured == nil {
+		t.Fatal("derive seam did not capture the derived buffer")
+	}
+	assertZeroized(t, captured, "derived key")
+}
+
+// TestUnlockSEDSedutilPBKDF2FailsClosedOnSerialError proves the derive fails
+// closed when the carrier implements Serialer but reading the serial errors: no
+// credential reaches the drive, the SED stays locked, and the seed is scrubbed.
+func TestUnlockSEDSedutilPBKDF2FailsClosedOnSerialError(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	m := &serialMockTPer{MockTPer: opal.NewMockTPer([]byte(testPIN)), serialErr: errors.New("serial read failed")}
+	pol := requiredPolicy(testPIN)
+	pol.SEDCredential.Derive = policy.DeriveSedutilPBKDF2
+	seedBacking := []byte(pol.SEDCredential.PIN)
+
+	construct := func() ([]opal.Transport, error) { return []opal.Transport{m}, nil }
+	err := unlockSED(pol, credential.Env{}, construct, &buf)
+	if err == nil {
+		t.Fatal("serial read error: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "sed unlock failed") || !strings.Contains(err.Error(), "derive") {
+		t.Errorf("error %q must carry the stage marker and name the derive stage", err)
+	}
+	if !m.Locked() {
+		t.Error("drive must stay locked when the serial read fails")
+	}
+	if strings.Contains(buf.String(), "sed unlock ok") {
+		t.Errorf("must not emit the success marker; output: %q", buf.String())
+	}
+	assertZeroized(t, seedBacking, "seed")
+}
+
+// assertZeroized fails if any byte of b is non-zero.
+func assertZeroized(t *testing.T, b []byte, name string) {
+	t.Helper()
+	for i, v := range b {
+		if v != 0 {
+			t.Errorf("%s buffer not zeroized at byte %d", name, i)
+			return
+		}
+	}
 }
 
 // testKeyPath is the ESP-relative keyfile path the keyfile-source tests use.
