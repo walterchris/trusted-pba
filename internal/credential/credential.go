@@ -6,6 +6,8 @@
 // sourcing must not mix into Opal protocol code (CLAUDE.md layering).
 package credential
 
+import "io/fs"
+
 // Source resolves the raw Admin1 PIN for the SED unlock. It fails closed: any
 // failure to produce the credential returns an error and no bytes — a Source
 // performs no fallback and no retry beyond its own bounded policy (ADR-0011 §5).
@@ -45,4 +47,10 @@ type Env struct {
 	// Console reads an interactive passphrase; nil when no text-input console is
 	// available. The console source fails closed when it is nil.
 	Console Prompter
+	// Files is the boot volume / ESP filesystem a Source may read a keyfile from;
+	// nil when no filesystem capability is available. It is the stdlib io/fs seam
+	// (the tamago entrypoint wires the UEFI ESP root, which is an fs.FS; host tests
+	// inject an fstest.MapFS), so the keyfile source stays UEFI-free. The keyfile
+	// source fails closed when it is nil.
+	Files fs.FS
 }

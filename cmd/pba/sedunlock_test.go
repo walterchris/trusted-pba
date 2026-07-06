@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/walterchris/trusted-pba/internal/credential"
 	"github.com/walterchris/trusted-pba/internal/opal"
@@ -415,6 +416,118 @@ func TestUnlockSEDDeriveNotImplementedFailsClosed(t *testing.T) {
 		t.Errorf("must not emit the success marker; output: %q", buf.String())
 	}
 	assertPINConsumed(t, pol, pinBacking)
+}
+
+// testKeyPath is the ESP-relative keyfile path the keyfile-source tests use.
+const testKeyPath = "EFI/KEY/sed.key"
+
+// keyfilePolicy is a required policy whose credential source is the file-backed
+// keyfile at testKeyPath, with derive raw.
+func keyfilePolicy() *policy.Policy {
+	return &policy.Policy{
+		SEDUnlock:     policy.SEDUnlockRequired,
+		SEDCredential: &policy.Credential{Source: policy.CredentialKeyFile, Path: testKeyPath, Derive: policy.DeriveRaw},
+	}
+}
+
+// TestUnlockSEDKeyFileSourceUnlocks proves the keyfile source is selected from the
+// policy, threaded the env's Files filesystem, and drives the same unlock as the
+// policy-pin path (the file's bytes are the raw credential).
+func TestUnlockSEDKeyFileSourceUnlocks(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	m := opal.NewMockTPer([]byte(testPIN))
+	pol := keyfilePolicy()
+	env := credential.Env{Files: fstest.MapFS{testKeyPath: {Data: []byte(testPIN)}}}
+
+	construct, _ := mockConstructor(m)
+	if err := unlockSED(pol, env, construct, &buf); err != nil {
+		t.Fatalf("unlockSED: %v", err)
+	}
+	if m.Locked() || !m.MBRDone() {
+		t.Errorf("drive locked=%v mbrDone=%v, want unlocked with MBRDone", m.Locked(), m.MBRDone())
+	}
+	if !strings.Contains(buf.String(), "TRUSTED-PBA: sed unlock ok") {
+		t.Errorf("missing success marker; output: %q", buf.String())
+	}
+}
+
+// TestUnlockSEDKeyFileWrongContentFailsClosed proves a keyfile whose bytes are not
+// the drive credential fails closed at auth: the drive stays locked, no success
+// marker, and no key content leaks into the error/output.
+func TestUnlockSEDKeyFileWrongContentFailsClosed(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	m := opal.NewMockTPer([]byte(testPIN))
+	const wrong = "wrong key bytes"
+	pol := keyfilePolicy()
+	env := credential.Env{Files: fstest.MapFS{testKeyPath: {Data: []byte(wrong)}}}
+
+	construct, _ := mockConstructor(m)
+	err := unlockSED(pol, env, construct, &buf)
+	if err == nil {
+		t.Fatal("wrong-content keyfile: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "sed unlock failed") {
+		t.Errorf("error %q must carry the 'sed unlock failed' stage marker", err)
+	}
+	if !m.Locked() {
+		t.Error("drive must stay locked after failed auth")
+	}
+	if strings.Contains(err.Error(), wrong) || strings.Contains(buf.String(), wrong) {
+		t.Errorf("key content leaked into error/output")
+	}
+	if strings.Contains(buf.String(), "sed unlock ok") {
+		t.Errorf("must not emit the success marker on failure; output: %q", buf.String())
+	}
+}
+
+// TestUnlockSEDKeyFileFailsClosedWithoutFiles proves the keyfile source fails
+// closed when the platform provides no filesystem (nil Files), never constructs a
+// transport, and never emits the success marker.
+func TestUnlockSEDKeyFileFailsClosedWithoutFiles(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	pol := keyfilePolicy()
+
+	construct := func() ([]opal.Transport, error) {
+		t.Fatal("absent filesystem must not construct a transport")
+		return nil, nil
+	}
+	err := unlockSED(pol, credential.Env{}, construct, &buf)
+	if err == nil {
+		t.Fatal("keyfile source with no filesystem: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "sed unlock failed") || !strings.Contains(err.Error(), "keyfile") {
+		t.Errorf("error %q must carry the stage marker and the source kind", err)
+	}
+	if strings.Contains(buf.String(), "sed unlock ok") {
+		t.Errorf("must not emit the success marker; output: %q", buf.String())
+	}
+}
+
+// TestUnlockSEDKeyFileMissingFailsClosed proves a missing keyfile fails closed
+// (never falls through to an unlock attempt) and reports the failing stage.
+func TestUnlockSEDKeyFileMissingFailsClosed(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	pol := keyfilePolicy()
+	env := credential.Env{Files: fstest.MapFS{}} // no keyfile present
+
+	construct := func() ([]opal.Transport, error) {
+		t.Fatal("missing keyfile must not construct a transport")
+		return nil, nil
+	}
+	err := unlockSED(pol, env, construct, &buf)
+	if err == nil {
+		t.Fatal("missing keyfile: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "sed unlock failed") || !strings.Contains(err.Error(), "keyfile") {
+		t.Errorf("error %q must carry the stage marker and the source kind", err)
+	}
+	if strings.Contains(buf.String(), "sed unlock ok") {
+		t.Errorf("must not emit the success marker; output: %q", buf.String())
+	}
 }
 
 // assertPINConsumed asserts the wiring's PIN contract: the policy no longer

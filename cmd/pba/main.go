@@ -101,10 +101,17 @@ func run(pol *policy.Policy, enforcing bool) error {
 	if err := pol.CheckSecureBoot(enforcing); err != nil {
 		return fmt.Errorf("policy: %w", err)
 	}
-	// env carries the platform capabilities a credential source may need (the
-	// console Prompter for interactive passphrase entry). The console source
-	// fails closed if the capability is absent.
-	env := credential.Env{Console: newConsolePrompter()}
+	// env carries the platform capabilities a credential source may need: the
+	// console Prompter for interactive passphrase entry, and the ESP / boot-volume
+	// filesystem for the keyfile source. Each source fails closed when the
+	// capability it needs is absent. Root() is the UEFI ESP root (an fs.FS); a
+	// failure to open it fails closed here (a keyfile policy could not read its
+	// key, and the chainload below would fail anyway).
+	root, err := x64.UEFI.Root()
+	if err != nil {
+		return fmt.Errorf("open ESP: %w", err)
+	}
+	env := credential.Env{Console: newConsolePrompter(), Files: root}
 	if err := unlockSED(pol, env, newUEFITransports, out); err != nil {
 		return err
 	}
