@@ -214,6 +214,14 @@ behavior. Pinned by tag + `go.sum` hash (published-tag hash recorded). No new
 external/indirect deps beyond the `tpba.5` set (first-party fork code); the #27
 scan set is unchanged. R-006 unchanged.
 
+**Amendment note (2026-07-06, A4b #104):** the additive `tpba.6` NVMe-passthru
+surface is now **consumed** — the new `internal/transport` NVMe carrier (A4b) uses
+`EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL` (Locate/Get handles, SecuritySend/SecurityReceive,
+and Identify-Controller `SerialNumber`) as a second `opal.Transport` carrier that
+also exposes the drive serial (the sedutil-pbkdf2 salt) via `credential.Serialer`.
+So "not yet selected" above no longer holds: `cmd/pba run()` selects the NVMe
+carrier for the `sedutil-pbkdf2` derive. Status unchanged (Accepted); no fork change.
+
 ## Alternatives Considered
 - **In-repo `unsafe`+asm UEFI-call primitive** — keeps everything in our tree but
   duplicates go-boot's `callFn` ABI trampoline and puts hand-written assembly in a
