@@ -131,6 +131,11 @@ func unlockSED(pol *policy.Policy, env credential.Env, newTransports func() ([]o
 //     that selects it can never silently send the wrong (raw) credential to the
 //     drive. It returns no bytes; the caller's deferred clear zeroizes the seed.
 //
+// A4 HAZARD: the caller's `defer clear(pin)` snapshots the SEED slice (registered
+// before this reassignment). raw is safe because it returns that same backing.
+// When A4 makes this return a NEW derived buffer, A4 MUST zeroize that buffer
+// itself (the seed's deferred clear will not cover it) and add a test for it.
+//
 // Any other value is a fail-closed error (Parse already rejects unknown values;
 // this guards the boot path regardless).
 func applyDerive(d policy.Derive, seed []byte) ([]byte, error) {
