@@ -232,11 +232,19 @@ func validateSEDCredential(p *Policy) error {
 		if len(c.PIN) == 0 {
 			return errors.New("sed_credential source policy-pin requires a non-empty pin")
 		}
+		if c.Path != "" {
+			return errors.New("sed_credential source policy-pin must not carry a path")
+		}
 	case CredentialConsole:
 		// No compiled-in secret for an interactive source: a stray pin here is a
-		// misconfiguration (dead secret baked into the image).
+		// misconfiguration (dead secret baked into the image). A path is unused by
+		// console, so a stray one is likewise a misconfiguration — reject it (the
+		// key fields are per-source; only keyfile takes a path).
 		if len(c.PIN) != 0 {
 			return errors.New("sed_credential source console must not carry a pin")
+		}
+		if c.Path != "" {
+			return errors.New("sed_credential source console must not carry a path")
 		}
 	case CredentialKeyFile:
 		// The keyfile source needs a path to read the key from and stores no
