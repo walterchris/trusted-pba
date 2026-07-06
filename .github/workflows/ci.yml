@@ -1,7 +1,8 @@
 # Virtual CI — runs on every PR, no hardware (compliance baseline §18).
-# All jobs are real: lint (gofmt/vet/golangci incl. staticcheck+gosec), unit,
-# fuzz-smoke, sast (govulncheck), dependency-scan (go-licenses), sbom
-# (cyclonedx-gomod), secret-scan (gitleaks), and the QEMU matrices.
+# All jobs are real: host analysis — lint (gofmt/vet/golangci incl.
+# staticcheck+gosec), unit-test, fuzz-smoke, vuln-scan (govulncheck),
+# license-check (go-licenses), sbom (cyclonedx-gomod), secret-scan (gitleaks),
+# authenticode-realimage — plus the qemu-* boot matrices (QEMU/OVMF).
 name: ci
 
 on:
@@ -129,7 +130,7 @@ jobs:
           tar -xzf gitleaks.tar.gz gitleaks
           ./gitleaks git --no-banner --redact
 
-  qemu-smoke:
+  qemu-chainload:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -181,7 +182,7 @@ jobs:
           name: qemu-serial-log
           path: qemu-serial.log
 
-  real-image-verify:
+  authenticode-realimage:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -206,7 +207,7 @@ jobs:
           echo "using shim: $shim"
           TPBA_REAL_SHIM="$shim" go test ./internal/truststore/ -run TestRealMicrosoftSignedImage -v
 
-  pba-matrix:
+  qemu-pba-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -232,7 +233,7 @@ jobs:
       - name: PBA verify-then-load matrix (pba-accept signed / pba-reject unsigned fail-closed)
         run: task pba-matrix
 
-  secureboot-matrix:
+  qemu-secureboot-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -269,7 +270,7 @@ jobs:
   # integration test — MockOpalDxe (EDK2 Storage Security mock) + the
   # `-tags sedtest` PBA, full unlock→MBRDone→chainload matrix incl. fault
   # negatives and a Secure-Boot-enforcing run (test/qemu/mock-opal-matrix.sh).
-  mock-opal-integration:
+  qemu-opal-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -324,7 +325,7 @@ jobs:
   # fixture), POS (override arms for exactly that buffer -> boots), TAMPER (unsigned
   # -> verify fails closed, never armed), SB-OFF (refuses to arm when SB not
   # enforcing). Our-keys-only OVMF, throwaway test keys (never committed).
-  override-matrix:
+  qemu-override-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -364,7 +365,7 @@ jobs:
   #   NEG: "wrong pass"    → sed unlock failed; no boot (fail-closed proof)
   # Key injection uses QMP send-key (PS/2 qcode events → OVMF ConIn), not serial
   # stdin (which OVMF's TerminalDxe mangles under -display none).
-  console-matrix:
+  qemu-console-matrix:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -391,7 +392,7 @@ jobs:
           path: ~/.tamago
           key: tamago-${{ runner.os }}-${{ hashFiles('Taskfile.yml') }}
       # Cache the pinned edk2 checkout + BaseTools + driver build intermediates.
-      # Same key strategy as mock-opal-integration: covers the EDK2 pin and
+      # Same key strategy as qemu-opal-matrix: covers the EDK2 pin and
       # driver sources so a bump or source change triggers a rebuild.
       - name: Cache pinned EDK2 tree (BaseTools + driver build)
         uses: actions/cache@v4
