@@ -84,11 +84,21 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
   assertions on the chainload markers, **mutation-proven** (a fail-open PBA
   mutant fails the matrix; harness FORBID liveness re-proven by
   `harness-selftest.sh` on every run).
+- **Credential source (ADR-0011, #98/#99):** the secret is now **policy-selected**
+  via `sed_credential` rather than a single compiled-in `sed_pin`. The `console`
+  source (#99, A2) resolves an interactive secret from UEFI `SimpleTextInput` with
+  **no secret at rest** (lowering exposure versus the compiled-in `policy-pin`, which
+  is extractable from the image), caps retries then fails closed (no unbounded
+  prompt/brute-force oracle), and never falls back to a weaker source. `policy-pin`
+  stays debug-only — build-tag-gated and rejected by the release policy gate (#90).
+  Every source is fail-closed on resolve failure → `on_error`, never chainload.
 - **Residual:** Medium — narrows to **hardware-pending (Phase 8)**: local 6/6
   matrix runs plus the mutation proof are in evidence; the green
   `mock-opal-integration` CI run on the PR completes the runs-in-CI claim
   (pending at the time of writing). Real-drive divergence remains tracked under
-  R-007/R-008/R-010.
+  R-007/R-008/R-010. The `console` source is fail-closed on every resolve path (two
+  independent reviews APPROVE, #99); **no rating change** — the unlock-before-auth
+  invariant is structural and source-independent.
   **Tests:** `TestUnlockHappyPath`, `TestUnlockFailsClosed/*`;
   `cmd/pba` `TestUnlockSED*`; `internal/policy` `TestParseSEDUnlock`;
   `mock-opal-matrix` (6 scenarios) + `harness-selftest.sh` (CI job
@@ -131,9 +141,13 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
   (extractable from the image) and the JSON decoder's intermediate string copy
   is unscrubable; `json.Decoder`'s internal read buffer likewise holds a heap
   copy of the PIN-bearing JSON — accepted because the compiled-in PIN is
-  test-only and replaced by real auth before production (ADR-0009). **Open scope:** when the
-  console PIN prompt lands, its input buffer must be zeroized (#51) — #51 item 1
-  closed the library layer, this wiring the policy-holder layer.
+  test-only and replaced by real auth before production (ADR-0009); the `console` source
+  (#99, ADR-0011) avoids the binary-embedded-secret residual entirely — **no secret at
+  rest**. **Console input-buffer scrub (landed):** the `console` source's read buffer is
+  zeroized on **every** path — success and all failure branches (empty/EOF/read-error/
+  retry-cap) — satisfying the #51/#101 obligation for interactive sources (#51 item 1
+  closed the library layer, the Phase 6 wiring the policy-holder layer, and #99 the
+  interactive-entry layer).
 - **Tests:** `TestUnlockZeroizesSecrets`, `TestTransactZeroizesMethodPayload`,
   `TestStartSessionGrowBudget`, `TestBuilderGrowPreventsReallocation`,
   `TestUnlockEmitsNoConsoleOutput`. **Evidence:** ADR-0004; #51 item 1
@@ -275,4 +289,5 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 | 2026-06-28 | First real-hardware bring-up (Swissbit OPAL drive, 4-NVMe board; ADR-0009 Amendment 2026-06-28, Proposed): R-002 unlock path now **selects the Opal SED among multiple Storage Security carriers** — `transport.NewAll()` enumerates every `EFI_STORAGE_SECURITY_COMMAND_PROTOCOL` handle and `cmd/pba selectSED` picks the one whose Level-0 Discovery succeeds, then unlocks only that one. Fail-closed preserved and now **unit-tested**: `TestUnlockSEDSelectsResponsiveSED` (skips a carrier that fails Discovery, authenticates the responsive SED, PIN spent only on it) and `TestUnlockSEDNoResponsiveSEDFailsClosed` (no responsive carrier → hard error, nothing unlocked, PIN still consumed) — added in `c962b12`; the PIN is still consumed/zeroized exactly once on the selected device. The earlier "MediaId 0" hypothesis was **disproven** — MediaId 0 is correct (no `EFI_BLOCK_IO` derivation added). ComID byte-swap is a transport-layer conformance detail (firmware writes SP-Specific in the opposite byte order to the TCG ComID; `transport.swapComID` corrects it, the EDK2 mock mirrors it, host MockTPer unaffected) — not a security-model change. **Accepted residual:** targeting a *specific* drive among MULTIPLE Opal SEDs is a future refinement; today the first Discovery-responsive SED is taken, and a wrong-drive pick just fails auth → fail closed (never unlocks the wrong drive). No rating change (residual stays Medium, hardware validation now in progress). Review record: `evidence/security-review-records/2026-06-28-opal-hw-bringup-handle-select-comid.md`. |
 | 2026-06-28 | go-boot fork `v1.6.2-tpba.5` (ADR-0008 Amendment 2026-06-28): R-006 pin → tpba.5. The bump adds the additive handle-aware Storage Security surface (`LocateHandleBuffer` + `EFI_LOCATE_SEARCH_TYPE` consts + `FreePool` slot `0x48`; `LocateStorageSecurityHandles`/`GetStorageSecurityByHandle`/`newStorageSecurity`) — no new upstream-file edit beyond the three carried since tpba.3/tpba.4. It also pulled new **indirect** deps into `go.sum` (the usbarmory stack: `gvisor`, `gliderlabs/ssh`, `arl/statsviz`, `armory-boot`, `go-net`, `x/term`/`x/time`/`x/exp`, etc.) — these are `// indirect` and **not reachable from the `tamago && amd64` `trusted-pba.efi` build graph** (reachability being verified separately); the #27 scan covers the fork's full transitive set. Published-tag `go.sum` hash recorded. No rating change. Review record: `evidence/security-review-records/2026-06-28-opal-hw-bringup-handle-select-comid.md`. |
 | 2026-07-05 | **R-014 added** — `pba-override` Secure Boot trust broker (ADR-0012/0013, `-tags trustbroker`, #82 tasks 2–5): a gated validation mode installs a SHIM-style `EFI_SECURITY2_ARCH_PROTOCOL` override authorizing exactly the one PBA-verified buffer (pointer+size, one-shot disarm, restore) so an out-of-`db` image the PBA trusts loads under enforcing Secure Boot — making the PBA an authority for out-of-`db` images. Fail-closed (verify before arm; any error refuses to boot; absent the tag a `pba-override` entry fails closed); off by default (not in release builds). PCR-7 divergence characterized and scoped away from Windows/BitLocker. Rated Likelihood Low / Severity High / Residual **Low** given the gating + fail-closed design. **Accepted** (ADR-0013, PR #88 rebase-merged to `main` 2026-07-05, tip `5fc25fd`); independent security review recorded (`evidence/security-review-records/2026-07-05-pba-override-trust-broker-82.md`). Mirrors the threat-model 2026-07-05 change-log entry (TB2/R-014). |
+| 2026-07-06 | **`sed_credential` schema + interactive `console` source (#99, A2, ADR-0011).** R-002/R-003 mitigation wording updated: the unlock secret is now **policy-selected** via `sed_credential` (`policy-pin` compiled-in debug — build-tag-gated + release-gated; or `console` — interactive UEFI `SimpleTextInput`, **no secret at rest**, bounded retries then fail closed, input buffer zeroized on every path #51/#101). Follows A1 (#98, the `credential.Source` abstraction). The `console` source **lowers R-003 exposure** versus the compiled-in PIN (no binary-embedded/extractable secret) and is fail-closed on every resolve path; R-002's unlock-before-auth invariant is structural and source-independent. Two independent reviews (go-reviewer + security-review-agent) APPROVE — fail-closed on all ~10 paths, single consume-once zeroization intact, console error-path scrub satisfied, no regression vs `main`. **No rating change** (R-002 Medium, R-003 Low). `internal/opal`/`internal/transport` untouched. A4 `sedutil-pbkdf2` derive-buffer zeroize hazard tracked on #104 (out of A2 scope). Review record: `evidence/security-review-records/2026-07-06-console-credential-99.md`. |
 | 2026-07-05 | **R-001/R-004 — release policy gate broadened (#90).** The release-only gate (`policy.CheckReleaseReady`, run by `release.yml`) previously blocked only `sed_unlock:"none"`; a release built from the dev default (`require_secure_boot:false` + firmware-mode `EFI/TEST/…` target) would have booted any ESP image with Secure Boot off (firmware mode does no PBA-side validation). The gate now also requires enforcing Secure Boot (an *absent* `require_secure_boot` is treated as unsafe — the opposite default from `sed_unlock`) and rejects a test-fixture target (normalized against `\`/`.`/`//`/leading-`/` variants). Reduces the R-001/R-004 release-time residual; no rating change (residual was already Low; boot path and dev-build behavior unchanged, PR CI unaffected — the gate runs only at release). Table-tested (`TestCheckReleaseReady`); independent security review APPROVE. Review record: `evidence/security-review-records/2026-07-05-release-gate-hardening-90.md`. |
