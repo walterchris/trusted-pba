@@ -6,5 +6,8 @@ package transport
 
 import "github.com/walterchris/trusted-pba/internal/opal"
 
-// UEFI must satisfy the Opal transport interface in every build.
-var _ opal.Transport = (*UEFI)(nil)
+// UEFI and NVMe must satisfy the Opal transport interface in every build.
+var (
+	_ opal.Transport = (*UEFI)(nil)
+	_ opal.Transport = (*NVMe)(nil)
+)
