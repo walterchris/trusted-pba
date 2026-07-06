@@ -102,17 +102,30 @@ if [ -n "${QEMU_TPM_SOCK:-}" ]; then
 		-device tpm-tis,tpmdev=tpm0)
 fi
 
-# Run QEMU as a child (not exec) so the cleanup trap reclaims $WORK on exit —
-# under exec the EXIT trap never fired and the per-run ESP/VARS images leaked
-# locally. QEMU shares this script's process group, so expect-serial.py's
-# process-group kill still reaches it; serial stays on the inherited stdout.
-qemu-system-x86_64 \
-	-machine q35 -accel tcg -cpu "$QEMU_CPU" -m "$QEMU_MEM" \
-	-nographic \
-	-drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE" \
-	-drive if=pflash,format=raw,unit=1,file="$VARS" \
-	"${DISK_ARGS[@]}" \
-	"${TPM_ARGS[@]}" \
-	-net none -no-reboot &
-QEMU_PID=$!
-wait "$QEMU_PID"
+QEMU_ARGS=(
+	-machine q35 -accel tcg -cpu "$QEMU_CPU" -m "$QEMU_MEM"
+	-nographic
+	-drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_CODE"
+	-drive if=pflash,format=raw,unit=1,file="$VARS"
+	"${DISK_ARGS[@]}"
+	"${TPM_ARGS[@]}"
+	-net none -no-reboot
+)
+
+if [ -n "${QEMU_INTERACTIVE:-}" ]; then
+	# Foreground (no &): QEMU must own the controlling TTY to switch it to raw
+	# mode — per-keystroke delivery with no local line-buffering/echo — which the
+	# interactive console passphrase prompt needs. Backgrounding leaves the TTY in
+	# cooked mode, so the host echoes locally and only ships the whole line on
+	# Enter as one burst, which OVMF's serial input decoder mangles. The EXIT trap
+	# still reclaims $WORK after QEMU returns (Ctrl-A X to quit).
+	qemu-system-x86_64 "${QEMU_ARGS[@]}"
+else
+	# Run QEMU as a child (not exec) so the cleanup trap reclaims $WORK on exit —
+	# under exec the EXIT trap never fired and the per-run ESP/VARS images leaked
+	# locally. QEMU shares this script's process group, so expect-serial.py's
+	# process-group kill still reaches it; serial stays on the inherited stdout.
+	qemu-system-x86_64 "${QEMU_ARGS[@]}" &
+	QEMU_PID=$!
+	wait "$QEMU_PID"
+fi
