@@ -69,6 +69,13 @@ if [ -n "${DRIVER:-}" ]; then
 	mcopy -i "$IMG" "$DRIVER" ::/EFI/MOCK/MOCKOPALDXE.EFI
 fi
 
+# Optional keyfile (ADR-0011 keyfile credential source, #100): stage the given
+# file at /EFI/KEY/sed.key so the keyfile PBA reads its unlock seed from the ESP.
+if [ -n "${KEYFILE:-}" ]; then
+	mmd -i "$IMG" ::/EFI/KEY
+	mcopy -i "$IMG" "$KEYFILE" ::/EFI/KEY/sed.key
+fi
+
 # Per-run writable copy of the NVRAM variable store.
 cp "$OVMF_VARS" "$VARS"
 chmod u+w "$VARS"

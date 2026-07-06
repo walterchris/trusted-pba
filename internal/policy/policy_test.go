@@ -39,6 +39,9 @@ func TestParseFailsClosed(t *testing.T) {
 		"policy-pin without pin":      `{"sed_unlock":"required","sed_credential":{"source":"policy-pin"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 		"policy-pin empty pin":        `{"sed_unlock":"required","sed_credential":{"source":"policy-pin","pin":""},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 		"console with pin":            `{"sed_unlock":"required","sed_credential":{"source":"console","pin":"correct horse"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"keyfile without path":        `{"sed_unlock":"required","sed_credential":{"source":"keyfile"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"keyfile empty path":          `{"sed_unlock":"required","sed_credential":{"source":"keyfile","path":""},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"keyfile with pin":            `{"sed_unlock":"required","sed_credential":{"source":"keyfile","path":"EFI/KEY/sed.key","pin":"correct horse"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 		"unknown derive":              `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"scrypt"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 		"credential unknown field":    `{"sed_unlock":"required","sed_credential":{"source":"console","extra":1},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 		"pin wrong json type":         `{"sed_unlock":"required","sed_credential":{"source":"policy-pin","pin":1},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
@@ -99,6 +102,15 @@ func TestParseSEDUnlock(t *testing.T) {
 	}
 	if p.SEDCredential.Source != CredentialConsole || len(p.SEDCredential.PIN) != 0 || p.SEDCredential.Derive != DeriveSedutilPBKDF2 {
 		t.Errorf("got %+v, want console/no-pin/sedutil-pbkdf2", p.SEDCredential)
+	}
+
+	// The keyfile source carries a path (not a compiled-in secret) and no pin.
+	p, err = Parse([]byte(`{"sed_unlock":"required","sed_credential":{"source":"keyfile","path":"EFI/KEY/sed.key"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if p.SEDCredential.Source != CredentialKeyFile || p.SEDCredential.Path != "EFI/KEY/sed.key" || len(p.SEDCredential.PIN) != 0 || p.SEDCredential.Derive != DeriveRaw {
+		t.Errorf("got %+v, want keyfile/path/no-pin/raw", p.SEDCredential)
 	}
 
 	// Absence = required (fail closed): the value must never silently become
@@ -236,6 +248,7 @@ func FuzzParse(f *testing.F) {
 	f.Add([]byte(`{"entries":[{"name":"x","path":"a","validation":"firmware"}]}`))
 	f.Add([]byte(`{"sed_unlock":"required","sed_credential":{"source":"policy-pin","pin":"correct horse"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`))
 	f.Add([]byte(`{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`))
+	f.Add([]byte(`{"sed_unlock":"required","sed_credential":{"source":"keyfile","path":"EFI/KEY/sed.key"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`))
 	f.Add([]byte(`{`))
 	f.Add([]byte(``))
 	f.Fuzz(func(_ *testing.T, data []byte) {

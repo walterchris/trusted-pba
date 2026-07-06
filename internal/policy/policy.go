@@ -94,6 +94,11 @@ const (
 	// the pre-boot console (ADR-0011 §4). No secret is stored at rest, so the
 	// policy carries no PIN for this source.
 	CredentialConsole CredentialSource = "console"
+	// CredentialKeyFile reads the unlock seed from a file on the boot volume / ESP
+	// (ADR-0011 §4). The policy carries the file Path (not the secret); the key
+	// lives at rest on the volume, so it is a low-assurance source. It carries no
+	// compiled-in PIN.
+	CredentialKeyFile CredentialSource = "keyfile"
 )
 
 // Derive is the optional stage that turns the source's seed into the raw drive
@@ -118,6 +123,7 @@ const (
 type Credential struct {
 	Source CredentialSource `json:"source"`
 	PIN    PIN              `json:"pin,omitempty"`    // policy-pin only
+	Path   string           `json:"path,omitempty"`   // keyfile only (ESP-relative)
 	Derive Derive           `json:"derive,omitempty"` // empty => raw
 }
 
@@ -231,6 +237,16 @@ func validateSEDCredential(p *Policy) error {
 		// misconfiguration (dead secret baked into the image).
 		if len(c.PIN) != 0 {
 			return errors.New("sed_credential source console must not carry a pin")
+		}
+	case CredentialKeyFile:
+		// The keyfile source needs a path to read the key from and stores no
+		// compiled-in secret: a path is mandatory and a stray pin is a
+		// misconfiguration (a dead secret baked into the image).
+		if c.Path == "" {
+			return errors.New("sed_credential source keyfile requires a non-empty path")
+		}
+		if len(c.PIN) != 0 {
+			return errors.New("sed_credential source keyfile must not carry a pin")
 		}
 	default:
 		return fmt.Errorf("unknown sed_credential source %q", c.Source)

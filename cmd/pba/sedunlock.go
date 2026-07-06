@@ -21,6 +21,7 @@ const banner = "TRUSTED-PBA"
 // from, mapping the policy's stated source (ADR-0011 §2) to its implementation:
 //   - policy-pin: the compiled-in debug PIN (takes ownership of cred.PIN bytes).
 //   - console: the interactive pre-boot passphrase prompt (via env.Console).
+//   - keyfile: the unlock seed read from the ESP / boot volume (via env.Files).
 //
 // It fails closed on an unknown source. It is a package variable so host tests
 // can inject a source that fails closed on Resolve; production maps from the
@@ -32,6 +33,8 @@ var newCredentialSource = func(cred *policy.Credential) (credential.Source, erro
 		return credential.NewPolicyPIN([]byte(cred.PIN)), nil
 	case policy.CredentialConsole:
 		return credential.NewConsole(), nil
+	case policy.CredentialKeyFile:
+		return credential.NewKeyFile(cred.Path), nil
 	default:
 		return nil, fmt.Errorf("unknown credential source %q", cred.Source)
 	}
