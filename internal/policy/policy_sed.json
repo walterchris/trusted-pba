@@ -1,7 +1,10 @@
 {
   "require_secure_boot": false,
   "sed_unlock": "required",
-  "sed_pin": "correct horse",
+  "sed_credential": {
+    "source": "policy-pin",
+    "pin": "correct horse"
+  },
   "on_error": "halt",
   "entries": [
     {

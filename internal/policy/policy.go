@@ -56,11 +56,12 @@ const (
 	SEDUnlockNone SEDUnlock = "none"
 )
 
-// PIN is an SED credential as raw bytes. It decodes from a plain JSON string
+// PIN is an SED credential seed as raw bytes. It decodes from a plain JSON string
 // (not the base64 a []byte field would require) so the compiled-in test policy
 // stays human-readable, and is held as bytes — not a string — so the boot path
-// can zeroize it after use. MVP only: the compiled-in policy carrying the PIN is
-// replaced by real authentication before any production deployment (ADR-0009).
+// can zeroize it after use. It is only carried by the policy-pin credential
+// source (the compiled-in debug credential, release-gated — ADR-0011 §5); real
+// deployments select an interactive/token source instead.
 type PIN []byte
 
 // String implements fmt.Stringer and always returns "[redacted]", enforcing the
@@ -73,10 +74,51 @@ func (PIN) String() string { return "[redacted]" }
 func (p *PIN) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
-		return fmt.Errorf("sed_pin must be a string: %w", err)
+		return fmt.Errorf("pin must be a string: %w", err)
 	}
 	*p = PIN(s)
 	return nil
+}
+
+// CredentialSource selects where the SED unlock credential comes from (ADR-0011
+// §1/§2). The policy states exactly one source — there is no fallback chain, so a
+// weaker source can never rescue a failed stronger one (ADR-0011 §5).
+type CredentialSource string
+
+const (
+	// CredentialPolicyPIN is the compiled-in-PIN debug source (ADR-0011 §5): the
+	// Admin1 PIN is baked into the policy JSON. It is extractable from the signed
+	// image, so CheckReleaseReady rejects it — it must never ship.
+	CredentialPolicyPIN CredentialSource = "policy-pin"
+	// CredentialConsole prompts the operator for the passphrase interactively at
+	// the pre-boot console (ADR-0011 §4). No secret is stored at rest, so the
+	// policy carries no PIN for this source.
+	CredentialConsole CredentialSource = "console"
+)
+
+// Derive is the optional stage that turns the source's seed into the raw drive
+// credential (ADR-0011 §3). It is orthogonal to the source.
+type Derive string
+
+const (
+	// DeriveRaw sends the seed to the drive unchanged (today's behavior). It is
+	// the default when derive is absent.
+	DeriveRaw Derive = "raw"
+	// DeriveSedutilPBKDF2 is sedutil's PBKDF2-HMAC-SHA1 derivation, interoperable
+	// with sedutil/lumentum-provisioned drives. It is a valid schema value here
+	// but is not implemented until A4 (#104); selecting it fails closed at unlock
+	// time — the schema accepts it now to avoid a second migration.
+	DeriveSedutilPBKDF2 Derive = "sedutil-pbkdf2"
+)
+
+// Credential is the SED unlock credential block (ADR-0011 §2), present only when
+// sed_unlock is "required". Source selects where the credential comes from; PIN
+// carries the compiled-in secret for the policy-pin source only; Derive is the
+// optional derivation stage (empty means raw).
+type Credential struct {
+	Source CredentialSource `json:"source"`
+	PIN    PIN              `json:"pin,omitempty"`    // policy-pin only
+	Derive Derive           `json:"derive,omitempty"` // empty => raw
 }
 
 // OnError is the terminal action taken on any fail-closed decision. Every option
@@ -103,9 +145,10 @@ type Policy struct {
 	// SEDUnlock gates the SED unlock step; empty means SEDUnlockRequired (fail
 	// closed — only an explicit "none" skips the unlock).
 	SEDUnlock SEDUnlock `json:"sed_unlock"`
-	// SEDPIN is the Admin1 credential for the unlock. MVP: the compiled-in test
-	// policy carries it (plan §7.1); the boot path consumes and zeroizes it.
-	SEDPIN PIN `json:"sed_pin"`
+	// SEDCredential states where the unlock credential comes from and how it is
+	// derived (ADR-0011). It is REQUIRED when sed_unlock is "required" and MUST be
+	// absent when "none". The boot path consumes and zeroizes any embedded PIN.
+	SEDCredential *Credential `json:"sed_credential"`
 }
 
 // Sentinel errors.
@@ -145,14 +188,8 @@ func Parse(data []byte) (*Policy, error) {
 	default:
 		return nil, fmt.Errorf("unknown sed_unlock %q", p.SEDUnlock)
 	}
-	// MVP: the policy is the PIN source, so "required" without a PIN can never
-	// unlock — reject it at parse time instead of failing at the drive. "none"
-	// must not embed a stray credential.
-	if p.SEDUnlock == SEDUnlockRequired && len(p.SEDPIN) == 0 {
-		return nil, errors.New("sed_unlock is required but sed_pin is empty")
-	}
-	if p.SEDUnlock == SEDUnlockNone && len(p.SEDPIN) != 0 {
-		return nil, errors.New("sed_pin set but sed_unlock is none")
+	if err := validateSEDCredential(&p); err != nil {
+		return nil, err
 	}
 	for i, e := range p.Entries {
 		if e.Name == "" || e.Path == "" {
@@ -165,6 +202,47 @@ func Parse(data []byte) (*Policy, error) {
 		}
 	}
 	return &p, nil
+}
+
+// validateSEDCredential enforces the ADR-0011 credential schema, fail closed:
+// "required" demands a well-formed sed_credential; "none" forbids one entirely
+// (mirroring ADR-0009's "none must not embed a stray credential"). It normalizes
+// an absent derive to raw. The source is the policy's single credential source —
+// there is no fallback chain (ADR-0011 §5).
+func validateSEDCredential(p *Policy) error {
+	if p.SEDUnlock == SEDUnlockNone {
+		if p.SEDCredential != nil {
+			return errors.New("sed_credential set but sed_unlock is none")
+		}
+		return nil
+	}
+	// SEDUnlockRequired (incl. the normalized default): a credential is mandatory.
+	c := p.SEDCredential
+	if c == nil {
+		return errors.New("sed_unlock is required but sed_credential is absent")
+	}
+	switch c.Source {
+	case CredentialPolicyPIN:
+		if len(c.PIN) == 0 {
+			return errors.New("sed_credential source policy-pin requires a non-empty pin")
+		}
+	case CredentialConsole:
+		// No compiled-in secret for an interactive source: a stray pin here is a
+		// misconfiguration (dead secret baked into the image).
+		if len(c.PIN) != 0 {
+			return errors.New("sed_credential source console must not carry a pin")
+		}
+	default:
+		return fmt.Errorf("unknown sed_credential source %q", c.Source)
+	}
+	switch c.Derive {
+	case "":
+		c.Derive = DeriveRaw // absence = raw: today's behavior
+	case DeriveRaw, DeriveSedutilPBKDF2:
+	default:
+		return fmt.Errorf("unknown sed_credential derive %q", c.Derive)
+	}
+	return nil
 }
 
 // Select returns the boot entry to use: the first (primary) entry. Selecting
@@ -207,6 +285,9 @@ func (p *Policy) CheckReleaseReady() error {
 	}
 	if p.SEDUnlock == SEDUnlockNone {
 		errs = append(errs, errors.New(`sed_unlock must not be "none" (a release must never silently skip the SED unlock)`))
+	}
+	if p.SEDCredential != nil && p.SEDCredential.Source == CredentialPolicyPIN {
+		errs = append(errs, errors.New(`sed_credential source must not be "policy-pin" (the compiled-in PIN is a debug source, extractable from the signed image — ADR-0011 §5)`))
 	}
 	for _, e := range p.Entries {
 		if isTestFixturePath(e.Path) {

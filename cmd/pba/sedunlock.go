@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -16,12 +17,25 @@ import (
 // banner prefixes every console/serial line the PBA emits.
 const banner = "TRUSTED-PBA"
 
-// newCredentialSource builds the credential.Source unlockSED resolves the PIN
-// from (it takes ownership of the PIN bytes). It is a package variable so host
-// tests can inject a source that fails closed on Resolve (a stand-in for the
-// console/keyfile/TPM sources ADR-0011 adds); production always uses the
-// policy-pin source over the compiled-in PIN.
-var newCredentialSource = credential.NewPolicyPIN
+// newCredentialSource builds the credential.Source unlockSED resolves the seed
+// from, mapping the policy's stated source (ADR-0011 §2) to its implementation:
+//   - policy-pin: the compiled-in debug PIN (takes ownership of cred.PIN bytes).
+//   - console: the interactive pre-boot passphrase prompt (via env.Console).
+//
+// It fails closed on an unknown source. It is a package variable so host tests
+// can inject a source that fails closed on Resolve; production maps from the
+// compiled-in policy. There is no fallback chain — one policy, one source
+// (ADR-0011 §5).
+var newCredentialSource = func(cred *policy.Credential) (credential.Source, error) {
+	switch cred.Source {
+	case policy.CredentialPolicyPIN:
+		return credential.NewPolicyPIN([]byte(cred.PIN)), nil
+	case policy.CredentialConsole:
+		return credential.NewConsole(), nil
+	default:
+		return nil, fmt.Errorf("unknown credential source %q", cred.Source)
+	}
+}
 
 // unlockSED enforces the policy's SED unlock gate before any chainload.
 //
@@ -37,16 +51,25 @@ var newCredentialSource = credential.NewPolicyPIN
 // chainload and never retry into boot; reboot/halt leaves the drive to its
 // locked-on-reset state rather than re-driving a half-unlocked session.
 //
-// PIN handling: the credential comes from a credential.Source (today the
-// policy-pin source built from pol.SEDPIN — ADR-0011 §1); pol is cleared so it
-// no longer holds the credential. The resolved PIN is handed to Unlock exactly
-// once, which consumes and zeroizes it. The deferred clear covers the paths
-// Unlock never sees the slice (resolve/transport-construction failure) and is
-// idempotent after Unlock's own zeroization. No other copy is made here.
+// PIN handling: the credential comes from a credential.Source selected from
+// pol.SEDCredential (ADR-0011 §2 — policy-pin over the compiled-in PIN, or the
+// interactive console source). The policy-pin bytes are handed to the source and
+// the credential's PIN field is cleared so pol no longer holds the credential.
+// The resolved seed is handed to Unlock exactly once, which consumes and
+// zeroizes it. The deferred clear covers the paths Unlock never sees the slice
+// (resolve/derive/transport-construction failure) and is idempotent after
+// Unlock's own zeroization. No other copy is made here.
+//
+// derive (ADR-0011 §3) is applied after the source resolves the seed: raw sends
+// it unchanged (today's behavior); sedutil-pbkdf2 is not implemented until A4
+// (#104) and fails closed here.
+//
+// env carries the platform capabilities the source may need (the console
+// Prompter); the tamago entrypoint builds the real one, host tests inject a mock.
 //
 // Errors never carry the PIN or session material (enforced for the opal layer
 // by its log-scrub test); only the failing stage is reported.
-func unlockSED(pol *policy.Policy, newTransports func() ([]opal.Transport, error), w io.Writer) error {
+func unlockSED(pol *policy.Policy, env credential.Env, newTransports func() ([]opal.Transport, error), w io.Writer) error {
 	if pol.SEDUnlock == policy.SEDUnlockNone {
 		// Console write errors are not actionable pre-boot; the decision itself
 		// is what matters.
@@ -54,15 +77,30 @@ func unlockSED(pol *policy.Policy, newTransports func() ([]opal.Transport, error
 		return nil
 	}
 
-	// The source takes ownership of pol.SEDPIN; clear the field so pol no longer
-	// holds the credential.
-	src := newCredentialSource([]byte(pol.SEDPIN))
-	pol.SEDPIN = nil
-	pin, err := src.Resolve(credential.Env{})
+	// Parse guarantees a credential for a required unlock, but guard anyway: a
+	// nil credential here must fail closed, never unlock without one.
+	cred := pol.SEDCredential
+	if cred == nil {
+		return errors.New("sed unlock failed: policy requires unlock but has no credential")
+	}
+
+	// The source takes ownership of cred.PIN (policy-pin) or none (console); clear
+	// the credential's PIN so pol no longer holds a secret.
+	src, err := newCredentialSource(cred)
+	if err != nil {
+		return fmt.Errorf("sed unlock failed: credential: %w", err)
+	}
+	pol.SEDCredential.PIN = nil
+	pin, err := src.Resolve(env)
 	if err != nil {
 		return fmt.Errorf("sed unlock failed: credential %s: %w", src.Kind(), err)
 	}
 	defer clear(pin)
+
+	pin, err = applyDerive(cred.Derive, pin)
+	if err != nil {
+		return fmt.Errorf("sed unlock failed: derive: %w", err)
+	}
 
 	transports, err := newTransports()
 	if err != nil {
@@ -83,6 +121,27 @@ func unlockSED(pol *policy.Policy, newTransports func() ([]opal.Transport, error
 	}
 	_, _ = fmt.Fprintf(w, "%s: sed unlock ok\r\n", banner)
 	return nil
+}
+
+// applyDerive turns the source's resolved seed into the raw drive credential per
+// the policy's derive stage (ADR-0011 §3):
+//   - raw (the parse-normalized default): the seed is the credential — returned
+//     unchanged, so the caller's single deferred zeroization still covers it.
+//   - sedutil-pbkdf2: not implemented until A4 (#104); fails closed so a policy
+//     that selects it can never silently send the wrong (raw) credential to the
+//     drive. It returns no bytes; the caller's deferred clear zeroizes the seed.
+//
+// Any other value is a fail-closed error (Parse already rejects unknown values;
+// this guards the boot path regardless).
+func applyDerive(d policy.Derive, seed []byte) ([]byte, error) {
+	switch d {
+	case policy.DeriveRaw:
+		return seed, nil
+	case policy.DeriveSedutilPBKDF2:
+		return nil, errors.New("sedutil-pbkdf2 derive not implemented (A4, #104)")
+	default:
+		return nil, fmt.Errorf("unknown derive %q", d)
+	}
 }
 
 // selectSED returns a client for the locked Opal SED among the Storage Security
