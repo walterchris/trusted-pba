@@ -4,6 +4,7 @@ package main
 
 import (
 	"errors"
+	"time"
 
 	"github.com/walterchris/go-boot/uefi"
 	"github.com/walterchris/go-boot/uefi/x64"
@@ -61,7 +62,10 @@ func (uefiPrompter) Passphrase(prompt string) (out []byte, err error) {
 		status := con.Input(&key)
 		switch {
 		case status&0xff == uefi.EFI_NOT_READY:
-			// No key buffered yet; poll again.
+			// No key buffered yet; sleep before polling again so the wait for
+			// operator keystrokes does not busy-spin and starve the TamaGo
+			// scheduler (mirrors go-boot's Console.Read).
+			time.Sleep(10 * time.Millisecond)
 			continue
 		case status != uefi.EFI_SUCCESS:
 			return out, errors.New("console input error")

@@ -175,7 +175,7 @@ refuses to boot rather than guessing.
 |---|---|---|---|
 | `require_secure_boot` | bool | `false` | If `true`, fail closed unless firmware Secure Boot is **enforcing** (`SecureBoot=1 && SetupMode=0`). |
 | `sed_unlock` | `"required"` \| `"none"` | **`required`** (absent ⇒ required) | Whether the PBA must unlock an Opal SED before chainload. `"none"` is an explicit, logged decision for non-SED machines — never an implicit fallback. |
-| `sed_pin` | string | — | Admin1 credential (MVP only; consumed and zeroized after use, renders as `[redacted]`). Required when `sed_unlock` is `required`; must be **absent** when `none`. |
+| `sed_credential` | object | — | Where the unlock credential comes from. Required when `sed_unlock` is `required`; must be **absent** when `none`. Fields: `source` (`"policy-pin"` \| `"console"`), `pin` (string; **`policy-pin` only** — a compiled-in Admin1 credential, redacts as `[redacted]`, zeroized after use; a debug source rejected by the release gate), `derive` (`"raw"` default \| `"sedutil-pbkdf2"`). `console` prompts the operator at the pre-boot console and carries no `pin`. |
 | `on_error` | `"halt"` \| `"shutdown"` \| `"reboot"` | **`halt`** | Terminal fail-closed action. None of them return control to the firmware boot order; `reboot` re-runs the PBA from the start. |
 | `entries` | array (≥1, required) | — | Candidate boot targets. Today only the **first** entry is used (availability-based selection is not yet implemented). |
 | `entries[].name` | string | — | Human-readable entry name (required). |
