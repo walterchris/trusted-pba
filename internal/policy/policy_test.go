@@ -39,6 +39,8 @@ func TestParseFailsClosed(t *testing.T) {
 		"policy-pin without pin":      `{"sed_unlock":"required","sed_credential":{"source":"policy-pin"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 		"policy-pin empty pin":        `{"sed_unlock":"required","sed_credential":{"source":"policy-pin","pin":""},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 		"console with pin":            `{"sed_unlock":"required","sed_credential":{"source":"console","pin":"correct horse"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"console with path":           `{"sed_unlock":"required","sed_credential":{"source":"console","path":"EFI/KEY/sed.key"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"policy-pin with path":        `{"sed_unlock":"required","sed_credential":{"source":"policy-pin","pin":"correct horse","path":"EFI/KEY/sed.key"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 		"keyfile without path":        `{"sed_unlock":"required","sed_credential":{"source":"keyfile"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 		"keyfile empty path":          `{"sed_unlock":"required","sed_credential":{"source":"keyfile","path":""},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 		"keyfile with pin":            `{"sed_unlock":"required","sed_credential":{"source":"keyfile","path":"EFI/KEY/sed.key","pin":"correct horse"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
