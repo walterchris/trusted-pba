@@ -188,6 +188,15 @@ tasks:
         vars: { OUT: '{{.APP}}-sedtest', EXTRA_TAGS: ",sedtest" }
       - test/qemu/mock-opal-matrix.sh {{.BIN}}/{{.APP}}-sedtest.efi {{.BIN}}/testapp.efi
 
+  sed-console:
+    desc: 'MANUAL/interactive: exercise the console credential source (ADR-0011 A2) in QEMU with the MockOpalDxe SED — you type the SED passphrase at the prompt ("correct horse" unlocks). Run in a terminal, not CI. Needs EDK2 build deps + virt-firmware.'
+    cmds:
+      - test/edk2-mock-opal/build.sh
+      - task: testapp
+      - task: _efi
+        vars: { OUT: '{{.APP}}-consoletest', EXTRA_TAGS: ",consoletest" }
+      - test/qemu/console-manual.sh {{.BIN}}/{{.APP}}-consoletest.efi {{.BIN}}/testapp.efi
+
   win-handoff:
     desc: Windows-handoff (A') — real Microsoft-signed loader verified by the PBA and loaded via firmware db under Secure Boot (needs sbsign, virt-firmware; set TPBA_REAL_WINLOADER/TPBA_REAL_SHIM or it skips). See ADR-0011.
     cmds:
