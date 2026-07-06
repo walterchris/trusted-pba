@@ -188,6 +188,15 @@ tasks:
         vars: { OUT: '{{.APP}}-sedtest', EXTRA_TAGS: ",sedtest" }
       - test/qemu/mock-opal-matrix.sh {{.BIN}}/{{.APP}}-sedtest.efi {{.BIN}}/testapp.efi
 
+  console-matrix:
+    desc: 'Console credential-source matrix (ADR-0011 A2, #99) — automated QMP send-key injection: POS (correct horse → unlock ok) + NEG (wrong pass → fail closed). Headless/CI-safe; no human keystrokes. Needs EDK2 build deps + virt-firmware.'
+    cmds:
+      - test/edk2-mock-opal/build.sh
+      - task: testapp
+      - task: _efi
+        vars: { OUT: '{{.APP}}-consoletest', EXTRA_TAGS: ",consoletest" }
+      - test/qemu/console-matrix.sh {{.BIN}}/{{.APP}}-consoletest.efi {{.BIN}}/testapp.efi
+
   sed-console:
     desc: 'MANUAL/interactive: exercise the console credential source (ADR-0011 A2) in QEMU with the MockOpalDxe SED — you type the SED passphrase at the prompt ("correct horse" unlocks). Run in a terminal, not CI. Needs EDK2 build deps + virt-firmware.'
     cmds:
