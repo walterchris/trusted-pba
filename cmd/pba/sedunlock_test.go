@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -652,7 +653,7 @@ func TestUnlockWithDeriveAutoSelectsBestFirst(t *testing.T) {
 	}
 	// Every derived key must be scrubbed by the loop on every path.
 	for i, k := range fu.gotKeys {
-		assertZeroized(t, k, "auto derived key attempt "+string(rune('0'+i)))
+		assertZeroized(t, k, "auto derived key attempt "+strconv.Itoa(i))
 	}
 	assertZeroized(t, seed, "seed")
 }
@@ -678,7 +679,7 @@ func TestUnlockWithDeriveAutoExhaustionFailsClosed(t *testing.T) {
 		t.Errorf("auto made %d attempts, want %d (the full candidate list)", fu.calls, len(sedutilPBKDF2AutoIterations))
 	}
 	for i, k := range fu.gotKeys {
-		assertZeroized(t, k, "auto derived key attempt "+string(rune('0'+i)))
+		assertZeroized(t, k, "auto derived key attempt "+strconv.Itoa(i))
 	}
 	assertZeroized(t, seed, "seed")
 }
@@ -701,7 +702,7 @@ func TestUnlockWithDeriveAutoStopsOnLockout(t *testing.T) {
 		t.Errorf("auto made %d attempts, want exactly 1 (stop on lockout)", fu.calls)
 	}
 	for i, k := range fu.gotKeys {
-		assertZeroized(t, k, "auto derived key attempt "+string(rune('0'+i)))
+		assertZeroized(t, k, "auto derived key attempt "+strconv.Itoa(i))
 	}
 	assertZeroized(t, seed, "seed")
 }
@@ -725,7 +726,7 @@ func TestUnlockWithDeriveAutoStopsOnOtherError(t *testing.T) {
 		t.Errorf("auto made %d attempts, want exactly 1 (stop on non-auth error)", fu.calls)
 	}
 	for i, k := range fu.gotKeys {
-		assertZeroized(t, k, "auto derived key attempt "+string(rune('0'+i)))
+		assertZeroized(t, k, "auto derived key attempt "+strconv.Itoa(i))
 	}
 	assertZeroized(t, seed, "seed")
 }
@@ -895,5 +896,21 @@ func assertPINConsumed(t *testing.T, pol *policy.Policy, backing []byte) {
 			t.Errorf("PIN backing array not zeroized at byte %d", i)
 			return
 		}
+	}
+}
+
+// TestResolvedDerivDefaultsMatchCredentialConstants guards the deliberate
+// duplication of the sedutil-pbkdf2 defaults across packages: internal/policy
+// keeps comment-linked local defaults so it need not import internal/credential
+// (ADR-0004 layering). A policy with no derive_params must therefore resolve to
+// exactly credential's exported defaults — enforced here via the public API so
+// the two pairs cannot silently drift.
+func TestResolvedDerivDefaultsMatchCredentialConstants(t *testing.T) {
+	c := &policy.Credential{Source: policy.CredentialPolicyPIN, Derive: policy.DeriveSedutilPBKDF2}
+	if got, auto := c.ResolvedIterations(); auto || got != credential.SedutilPBKDF2Iterations {
+		t.Errorf("ResolvedIterations() = (%d, %t), want (%d, false)", got, auto, credential.SedutilPBKDF2Iterations)
+	}
+	if got := c.ResolvedKeyLen(); got != credential.SedutilPBKDF2KeyLen {
+		t.Errorf("ResolvedKeyLen() = %d, want %d", got, credential.SedutilPBKDF2KeyLen)
 	}
 }
