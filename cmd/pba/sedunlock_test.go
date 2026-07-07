@@ -444,19 +444,27 @@ func (m *serialMockTPer) Serial() ([]byte, error) {
 // pbkdf2Serial is a fixed 20-byte space-padded serial (the PBKDF2 salt).
 var pbkdf2Serial = []byte("S3EMNX0M12345678    ")
 
-// TestApplyDeriveSedutilPBKDF2ZeroizesSeed proves applyDerive with sedutil-pbkdf2
-// returns the PBKDF2-HMAC-SHA512 key (matching credential.SedutilPBKDF2) in a NEW
-// buffer distinct from the seed and zeroizes the consumed seed in place.
-func TestApplyDeriveSedutilPBKDF2ZeroizesSeed(t *testing.T) {
+// pbkdf2Iterations / pbkdf2KeyLen are the default sedutil-pbkdf2 parameters the
+// derive-path tests exercise (the resolved defaults for a policy with no
+// derive_params).
+const (
+	pbkdf2Iterations = credential.SedutilPBKDF2Iterations
+	pbkdf2KeyLen     = credential.SedutilPBKDF2KeyLen
+)
+
+// TestApplyDeriveSedutilPBKDF2NewBuffer proves applyDerive returns the
+// PBKDF2-HMAC-SHA512 key (matching credential.SedutilPBKDF2) in a NEW buffer
+// distinct from the seed. Zeroizing the seed is now the caller's job (unlockSED),
+// so the seed is left intact here.
+func TestApplyDeriveSedutilPBKDF2NewBuffer(t *testing.T) {
 	t.Parallel()
 	seed := []byte(testPIN)
-	want, err := credential.SedutilPBKDF2([]byte(testPIN), pbkdf2Serial)
+	want, err := credential.SedutilPBKDF2([]byte(testPIN), pbkdf2Serial, pbkdf2Iterations, pbkdf2KeyLen)
 	if err != nil {
 		t.Fatalf("reference derive: %v", err)
 	}
-	m := &serialMockTPer{MockTPer: opal.NewMockTPer(nil), serial: pbkdf2Serial}
 
-	got, err := applyDeriveImpl(policy.DeriveSedutilPBKDF2, seed, m)
+	got, err := applyDeriveImpl(seed, pbkdf2Serial, pbkdf2Iterations, pbkdf2KeyLen)
 	if err != nil {
 		t.Fatalf("applyDerive: %v", err)
 	}
@@ -465,11 +473,6 @@ func TestApplyDeriveSedutilPBKDF2ZeroizesSeed(t *testing.T) {
 	}
 	if &got[0] == &seed[0] {
 		t.Error("derived key must be a NEW buffer, not the seed backing")
-	}
-	for i, b := range seed {
-		if b != 0 {
-			t.Fatalf("seed not zeroized at byte %d after derive", i)
-		}
 	}
 }
 
@@ -481,7 +484,7 @@ func TestApplyDeriveSedutilPBKDF2ZeroizesSeed(t *testing.T) {
 func TestUnlockSEDSedutilPBKDF2ZeroizesSeedAndDerived(t *testing.T) {
 	// Not parallel: swaps the package-level applyDerive seam.
 	var buf bytes.Buffer
-	derivedKey, err := credential.SedutilPBKDF2([]byte(testPIN), pbkdf2Serial)
+	derivedKey, err := credential.SedutilPBKDF2([]byte(testPIN), pbkdf2Serial, pbkdf2Iterations, pbkdf2KeyLen)
 	if err != nil {
 		t.Fatalf("reference derive: %v", err)
 	}
@@ -493,8 +496,8 @@ func TestUnlockSEDSedutilPBKDF2ZeroizesSeedAndDerived(t *testing.T) {
 	var captured []byte
 	orig := applyDerive
 	t.Cleanup(func() { applyDerive = orig })
-	applyDerive = func(d policy.Derive, seed []byte, tr opal.Transport) ([]byte, error) {
-		out, err := orig(d, seed, tr)
+	applyDerive = func(seed, salt []byte, iterations, keyLen int) ([]byte, error) {
+		out, err := orig(seed, salt, iterations, keyLen)
 		captured = out // the derived buffer handed to Unlock
 		return out, err
 	}
@@ -532,8 +535,8 @@ func TestUnlockSEDSedutilPBKDF2ZeroizesOnUnlockFailure(t *testing.T) {
 	var captured []byte
 	orig := applyDerive
 	t.Cleanup(func() { applyDerive = orig })
-	applyDerive = func(d policy.Derive, seed []byte, tr opal.Transport) ([]byte, error) {
-		out, err := orig(d, seed, tr)
+	applyDerive = func(seed, salt []byte, iterations, keyLen int) ([]byte, error) {
+		out, err := orig(seed, salt, iterations, keyLen)
 		captured = out
 		return out, err
 	}
@@ -582,6 +585,178 @@ func TestUnlockSEDSedutilPBKDF2FailsClosedOnSerialError(t *testing.T) {
 		t.Errorf("must not emit the success marker; output: %q", buf.String())
 	}
 	assertZeroized(t, seedBacking, "seed")
+}
+
+// fakeUnlocker is an unlocker whose Unlock returns a configured error per attempt,
+// recording each key it received (by reference, so the caller's post-Unlock
+// clear() is observable) and each key's contents captured at call time (a copy, to
+// prove best-first selection by which iteration count derived the accepted key). It
+// does NOT zeroize the key itself — that is unlockWithDerive's job — so tests can
+// assert the loop scrubs every key on every path.
+type fakeUnlocker struct {
+	results   []error  // result for attempt i (index into the calls)
+	gotKeys   [][]byte // the key slice handed to each Unlock (same backing)
+	gotCopies [][]byte // a snapshot copy of each key at call time
+	calls     int
+}
+
+func (f *fakeUnlocker) Unlock(_ opal.Authority, pin []byte) error {
+	i := f.calls
+	f.calls++
+	f.gotKeys = append(f.gotKeys, pin)
+	f.gotCopies = append(f.gotCopies, bytes.Clone(pin))
+	if i < len(f.results) {
+		return f.results[i]
+	}
+	return errors.New("unexpected extra unlock attempt")
+}
+
+// autoPolicy is a required sedutil-pbkdf2 policy in "auto" iteration mode.
+func autoPolicy() *policy.Credential {
+	return &policy.Credential{
+		Source:       policy.CredentialConsole,
+		Derive:       policy.DeriveSedutilPBKDF2,
+		DeriveParams: &policy.DeriveParams{Iterations: policy.IterationSpec{Auto: true}},
+	}
+}
+
+// TestUnlockWithDeriveAutoSelectsBestFirst proves the auto loop tries candidates
+// best-first and stops on the first that authenticates: the fake accepts the second
+// candidate (75000) only, so the loop must derive at 500000 (NOT_AUTHORIZED),
+// advance, then derive at 75000 (success) — exactly two attempts, the second key
+// matching the 75000 KAT.
+func TestUnlockWithDeriveAutoSelectsBestFirst(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	seed := []byte(testPIN)
+	tr := &serialMockTPer{MockTPer: opal.NewMockTPer(nil), serial: pbkdf2Serial}
+	want75000, err := credential.SedutilPBKDF2([]byte(testPIN), pbkdf2Serial, 75000, pbkdf2KeyLen)
+	if err != nil {
+		t.Fatalf("reference derive: %v", err)
+	}
+	fu := &fakeUnlocker{results: []error{opal.ErrNotAuthorized, nil}}
+
+	if err := unlockWithDerive(fu, autoPolicy(), seed, tr, &buf); err != nil {
+		t.Fatalf("unlockWithDerive auto: %v", err)
+	}
+	if fu.calls != 2 {
+		t.Fatalf("auto made %d unlock attempts, want exactly 2 (500000 then 75000)", fu.calls)
+	}
+	// Attempt 1 must be the best-first (500000) key, attempt 2 the 75000 key.
+	want500000, _ := credential.SedutilPBKDF2([]byte(testPIN), pbkdf2Serial, 500000, pbkdf2KeyLen)
+	if !bytes.Equal(fu.gotCopies[0], want500000) {
+		t.Errorf("attempt 1 key = %x, want the 500000 derivation %x", fu.gotCopies[0], want500000)
+	}
+	if !bytes.Equal(fu.gotCopies[1], want75000) {
+		t.Errorf("attempt 2 key = %x, want the 75000 derivation %x", fu.gotCopies[1], want75000)
+	}
+	// Every derived key must be scrubbed by the loop on every path.
+	for i, k := range fu.gotKeys {
+		assertZeroized(t, k, "auto derived key attempt "+string(rune('0'+i)))
+	}
+	assertZeroized(t, seed, "seed")
+}
+
+// TestUnlockWithDeriveAutoExhaustionFailsClosed proves the auto loop fails closed
+// after every candidate returns NOT_AUTHORIZED — it never advances into boot — and
+// scrubs every derived key.
+func TestUnlockWithDeriveAutoExhaustionFailsClosed(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	seed := []byte(testPIN)
+	tr := &serialMockTPer{MockTPer: opal.NewMockTPer(nil), serial: pbkdf2Serial}
+	fu := &fakeUnlocker{results: []error{opal.ErrNotAuthorized, opal.ErrNotAuthorized}}
+
+	err := unlockWithDerive(fu, autoPolicy(), seed, tr, &buf)
+	if err == nil {
+		t.Fatal("auto with all NOT_AUTHORIZED: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "no candidate iteration count authenticated") {
+		t.Errorf("error %q must name the exhaustion condition", err)
+	}
+	if fu.calls != len(sedutilPBKDF2AutoIterations) {
+		t.Errorf("auto made %d attempts, want %d (the full candidate list)", fu.calls, len(sedutilPBKDF2AutoIterations))
+	}
+	for i, k := range fu.gotKeys {
+		assertZeroized(t, k, "auto derived key attempt "+string(rune('0'+i)))
+	}
+	assertZeroized(t, seed, "seed")
+}
+
+// TestUnlockWithDeriveAutoStopsOnLockout proves AUTHORITY_LOCKED_OUT on the first
+// candidate halts immediately (no second attempt) and fails closed — further tries
+// would burn the try-limit and are futile.
+func TestUnlockWithDeriveAutoStopsOnLockout(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	seed := []byte(testPIN)
+	tr := &serialMockTPer{MockTPer: opal.NewMockTPer(nil), serial: pbkdf2Serial}
+	fu := &fakeUnlocker{results: []error{opal.ErrAuthLockedOut}}
+
+	err := unlockWithDerive(fu, autoPolicy(), seed, tr, &buf)
+	if !errors.Is(err, opal.ErrAuthLockedOut) {
+		t.Fatalf("want ErrAuthLockedOut, got %v", err)
+	}
+	if fu.calls != 1 {
+		t.Errorf("auto made %d attempts, want exactly 1 (stop on lockout)", fu.calls)
+	}
+	for i, k := range fu.gotKeys {
+		assertZeroized(t, k, "auto derived key attempt "+string(rune('0'+i)))
+	}
+	assertZeroized(t, seed, "seed")
+}
+
+// TestUnlockWithDeriveAutoStopsOnOtherError proves a non-auth error (transport,
+// malformed) on the first candidate halts immediately and is not masked by advancing
+// to the next candidate.
+func TestUnlockWithDeriveAutoStopsOnOtherError(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	seed := []byte(testPIN)
+	tr := &serialMockTPer{MockTPer: opal.NewMockTPer(nil), serial: pbkdf2Serial}
+	transportErr := errors.New("transport exploded")
+	fu := &fakeUnlocker{results: []error{transportErr}}
+
+	err := unlockWithDerive(fu, autoPolicy(), seed, tr, &buf)
+	if !errors.Is(err, transportErr) {
+		t.Fatalf("want the transport error, got %v", err)
+	}
+	if fu.calls != 1 {
+		t.Errorf("auto made %d attempts, want exactly 1 (stop on non-auth error)", fu.calls)
+	}
+	for i, k := range fu.gotKeys {
+		assertZeroized(t, k, "auto derived key attempt "+string(rune('0'+i)))
+	}
+	assertZeroized(t, seed, "seed")
+}
+
+// TestUnlockWithDeriveExplicitSingleAttempt proves an explicit iteration count
+// derives once and attempts Unlock exactly once (no auto trial loop), with the key
+// zeroized afterward.
+func TestUnlockWithDeriveExplicitSingleAttempt(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	seed := []byte(testPIN)
+	tr := &serialMockTPer{MockTPer: opal.NewMockTPer(nil), serial: pbkdf2Serial}
+	cred := &policy.Credential{
+		Source:       policy.CredentialConsole,
+		Derive:       policy.DeriveSedutilPBKDF2,
+		DeriveParams: &policy.DeriveParams{Iterations: policy.IterationSpec{Count: 75000}},
+	}
+	fu := &fakeUnlocker{results: []error{nil}}
+
+	if err := unlockWithDerive(fu, cred, seed, tr, &buf); err != nil {
+		t.Fatalf("unlockWithDerive explicit: %v", err)
+	}
+	if fu.calls != 1 {
+		t.Fatalf("explicit made %d attempts, want exactly 1", fu.calls)
+	}
+	want, _ := credential.SedutilPBKDF2([]byte(testPIN), pbkdf2Serial, 75000, pbkdf2KeyLen)
+	if !bytes.Equal(fu.gotCopies[0], want) {
+		t.Errorf("explicit key = %x, want the 75000 derivation %x", fu.gotCopies[0], want)
+	}
+	assertZeroized(t, fu.gotKeys[0], "explicit derived key")
+	assertZeroized(t, seed, "seed")
 }
 
 // assertZeroized fails if any byte of b is non-zero.

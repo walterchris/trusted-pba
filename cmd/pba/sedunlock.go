@@ -59,10 +59,12 @@ var newCredentialSource = func(cred *policy.Credential) (credential.Source, erro
 // interactive console source). The policy-pin bytes are handed to the source and
 // the credential's PIN field is cleared so pol no longer holds the credential.
 // The resolved seed is handed to Unlock exactly once (raw derive) or consumed by
-// the derive into a new key that Unlock then consumes (sedutil-pbkdf2); Unlock
-// zeroizes whichever slice it receives. Deferred clears cover the paths Unlock
-// never sees the slice (resolve/derive/transport/select failure) and are
-// idempotent after Unlock's own zeroization. No other copy is made here.
+// the derive into a new key that Unlock then consumes (sedutil-pbkdf2; the "auto"
+// mode derives + attempts Unlock once per candidate iteration count, each key
+// scrubbed after its attempt — see unlockWithDerive). Unlock zeroizes whichever
+// slice it receives. Deferred clears cover the paths Unlock never sees the slice
+// (resolve/derive/transport/select failure) and are idempotent after Unlock's own
+// zeroization. No other copy is made here.
 //
 // derive (ADR-0011 §3) is applied AFTER the drive is selected, because the
 // sedutil-pbkdf2 salt is the selected drive's serial: raw sends the seed
@@ -121,69 +123,126 @@ func unlockSED(pol *policy.Policy, env credential.Env, newTransports func() ([]o
 		return fmt.Errorf("sed unlock failed: %w", err)
 	}
 
-	// derive after selection: raw returns the seed unchanged; sedutil-pbkdf2 returns
-	// a NEW key (and consumes the seed), so scrub whatever Unlock receives on every
-	// path even when Unlock never runs.
-	pin, err := applyDerive(cred.Derive, seed, selected)
-	if err != nil {
-		return fmt.Errorf("sed unlock failed: derive: %w", err)
-	}
-	defer clear(pin)
-
-	if err := client.Unlock(opal.AuthorityAdmin1, pin); err != nil {
+	// derive + unlock after selection: raw and explicit sedutil-pbkdf2 derive once
+	// and attempt Unlock once (behavior identical to today's single-attempt path);
+	// sedutil-pbkdf2 "auto" tries each candidate iteration count best-first, stopping
+	// on the first that authenticates and failing closed otherwise. Every derived key
+	// is zeroized on every path.
+	if err := unlockWithDerive(client, cred, seed, selected, w); err != nil {
 		return fmt.Errorf("sed unlock failed: %w", err)
 	}
 	_, _ = fmt.Fprintf(w, "%s: sed unlock ok\r\n", banner)
 	return nil
 }
 
-// applyDerive turns the source's resolved seed into the raw drive credential per
-// the policy's derive stage (ADR-0011 §3), given the selected drive's transport:
-//   - raw (the parse-normalized default): the seed is the credential — returned
-//     unchanged (same backing), so the caller's deferred clear over the returned
-//     slice still zeroizes it (idempotent with the seed's own deferred clear).
-//   - sedutil-pbkdf2: PBKDF2-HMAC-SHA512 over the seed with the drive serial as
-//     salt (credential.SedutilPBKDF2). The serial comes from the selected
-//     transport's optional credential.Serialer capability. It returns a NEW key
-//     buffer distinct from the seed; it zeroizes the SEED here once consumed (the
-//     seed's own deferred clear then runs idempotently), and the caller wraps the
-//     returned key in its own deferred clear. Today's Storage-Security carrier
-//     does not implement Serialer, so this fails closed with a clear message
-//     until the NVMe-passthru carrier (A4b) supplies the serial — never silently
-//     sending the wrong (raw) credential to the drive.
+// sedutilPBKDF2AutoIterations is the fixed best-first candidate list the
+// sedutil-pbkdf2 "auto" mode tries (#112). Best-first (the lumentum/v1.15 default
+// 500000 first) so the common case authenticates on attempt #1 and burns no extra
+// Admin1 try-limit; the older upstream default (75000) is only reached on a
+// genuinely non-default drive. Keep it small and fixed — extend only when a third
+// real-world value appears (a large list is an unacceptable try-limit exposure for
+// a pre-boot product; ADR-0011 §3 / #112).
+var sedutilPBKDF2AutoIterations = []int{500000, 75000}
+
+// unlocker is the single Opal capability unlockWithDerive needs: attempt an
+// authenticated unlock with a credential (consuming and zeroizing it). *opal.Client
+// satisfies it; host tests inject a fake to drive the auto loop's control flow
+// (advance on NOT_AUTHORIZED, stop on lockout/other) without hand-building TCG
+// streams. Defined here (accept interfaces) where it is consumed.
+type unlocker interface {
+	Unlock(opal.Authority, []byte) error
+}
+
+// unlockWithDerive derives the drive credential from the seed per the policy's
+// derive stage and attempts the Opal unlock, failing closed on every error path:
 //
-// Any other value is a fail-closed error (Parse already rejects unknown values;
-// this guards the boot path regardless).
+//   - raw / explicit sedutil-pbkdf2: derive once (raw = the seed unchanged;
+//     sedutil-pbkdf2 = PBKDF2 with the resolved iteration count + key length) and
+//     attempt Unlock exactly once — identical control flow to today.
+//   - sedutil-pbkdf2 "auto": derive + attempt Unlock for each candidate iteration
+//     count in sedutilPBKDF2AutoIterations, best-first. It advances ONLY on a
+//     NOT_AUTHORIZED result (wrong iteration count → try the next); it stops
+//     immediately and fails closed on AUTHORITY_LOCKED_OUT (further tries are futile
+//     and burn the try-limit) or any other error (transport, malformed — never
+//     masked by advancing). Exhausting the list is a fail-closed error.
 //
-// It is a package variable so host tests can capture the derived buffer to assert
-// it is zeroized after unlockSED (mirroring the newCredentialSource seam);
-// production always uses applyDeriveImpl.
+// The salt (drive serial) is read once via the transport's optional
+// credential.Serialer capability; today's Storage-Security carrier does not
+// implement it, so sedutil-pbkdf2 fails closed until the NVMe-passthru carrier
+// (A4b) supplies it. Unlock consumes and zeroizes the key it receives; this scrubs
+// the seed once consumed and scrubs every derived key on every path (F-2). It never
+// logs the iteration count or any credential in normal output — the winning count is
+// emitted only under the hwdbg gate.
+func unlockWithDerive(client unlocker, cred *policy.Credential, seed []byte, t opal.Transport, w io.Writer) error {
+	if cred.Derive == policy.DeriveRaw {
+		// The seed is the credential; Unlock consumes and zeroizes it. The caller's
+		// deferred clear(seed) then runs idempotently.
+		return client.Unlock(opal.AuthorityAdmin1, seed)
+	}
+	if cred.Derive != policy.DeriveSedutilPBKDF2 {
+		// Parse rejects unknown derive values; guard the boot path regardless.
+		return fmt.Errorf("derive: unknown derive %q", cred.Derive)
+	}
+
+	// sedutil-pbkdf2: the salt is the drive serial, read exactly once (not per
+	// attempt). The seed is consumed by the derivation; scrub it once done here (the
+	// caller's deferred clear then runs idempotently).
+	defer clear(seed)
+	s, ok := t.(credential.Serialer)
+	if !ok {
+		return errors.New("derive: drive serial unavailable: sedutil-pbkdf2 needs the NVMe-passthru carrier (A4b)")
+	}
+	salt, err := s.Serial()
+	if err != nil {
+		return fmt.Errorf("derive: drive serial: %w", err)
+	}
+	keyLen := cred.ResolvedKeyLen()
+
+	count, auto := cred.ResolvedIterations()
+	if !auto {
+		key, err := applyDerive(seed, salt, count, keyLen)
+		if err != nil {
+			return fmt.Errorf("derive: %w", err)
+		}
+		defer clear(key)
+		return client.Unlock(opal.AuthorityAdmin1, key)
+	}
+
+	// auto: try each candidate iteration count best-first.
+	for _, iterations := range sedutilPBKDF2AutoIterations {
+		key, err := applyDerive(seed, salt, iterations, keyLen)
+		if err != nil {
+			return fmt.Errorf("derive: %w", err)
+		}
+		err = client.Unlock(opal.AuthorityAdmin1, key)
+		clear(key) // scrub whether or not Unlock already zeroized it (idempotent)
+		if err == nil {
+			if sedDebug {
+				_, _ = fmt.Fprintf(w, "%s: [hwdbg] sedutil-pbkdf2 auto: authenticated at %d iterations\r\n", banner, iterations)
+			}
+			return nil
+		}
+		if errors.Is(err, opal.ErrNotAuthorized) {
+			continue // wrong iteration count: try the next candidate
+		}
+		// Lockout or any other error: stop immediately, fail closed (never advance).
+		return err
+	}
+	return errors.New("sedutil-pbkdf2 auto: no candidate iteration count authenticated")
+}
+
+// applyDerive runs the sedutil-pbkdf2 derivation for a single explicit iteration
+// count and key length: PBKDF2-HMAC-SHA512 over the seed with the drive serial as
+// salt (credential.SedutilPBKDF2), returning a NEW key buffer distinct from the
+// seed. The caller owns and zeroizes both the seed and the returned key.
+//
+// It is a package variable so host tests can capture the derived buffer to assert it
+// is zeroized after unlockSED (mirroring the newCredentialSource seam); production
+// always uses applyDeriveImpl.
 var applyDerive = applyDeriveImpl
 
-func applyDeriveImpl(d policy.Derive, seed []byte, t opal.Transport) ([]byte, error) {
-	switch d {
-	case policy.DeriveRaw:
-		return seed, nil
-	case policy.DeriveSedutilPBKDF2:
-		s, ok := t.(credential.Serialer)
-		if !ok {
-			return nil, errors.New("drive serial unavailable: sedutil-pbkdf2 needs the NVMe-passthru carrier (A4b)")
-		}
-		salt, err := s.Serial()
-		if err != nil {
-			return nil, fmt.Errorf("drive serial: %w", err)
-		}
-		key, err := credential.SedutilPBKDF2(seed, salt)
-		if err != nil {
-			return nil, err
-		}
-		// The seed is consumed; scrub it now. The caller's deferred clear(seed)
-		// then runs idempotently, and the returned key gets its own deferred clear.
-		clear(seed)
-		return key, nil
-	default:
-		return nil, fmt.Errorf("unknown derive %q", d)
-	}
+func applyDeriveImpl(seed, salt []byte, iterations, keyLen int) ([]byte, error) {
+	return credential.SedutilPBKDF2(seed, salt, iterations, keyLen)
 }
 
 // selectSED returns a client for the locked Opal SED among the Storage Security
