@@ -86,6 +86,44 @@ TPM-backed sources and is the main cost driver.
    parameterized because sedutil versions differ; A4a KAT-verified these values
    against the sedutil source in use (bit-identical to sedutil's `cf_pbkdf2_hmac`
    + `cf_sha512`). Any source composes with either convention.
+
+   **Configurable derive parameters + `auto` mode (#112).** The `sedutil-pbkdf2`
+   iteration count and key length are **policy-configurable** via an optional
+   `derive_params` block on the credential —
+   `{ "iterations": <int> | "auto", "key_len": <int> }` — so a deployment can match
+   whatever sedutil provisioned its drives without rebuilding the PBA. An **absent**
+   `derive_params` (or an absent field within it) uses the defaults **500000
+   iterations / 32-byte key**, which is **byte-for-byte identical to the pre-#112
+   behavior** (derive once, one Unlock). The hash is unchanged (SHA-512). Validation
+   is fail-closed: `derive_params` is rejected on any non-`sedutil-pbkdf2` derive
+   (a dead knob), an explicit `iterations` must be `1..100_000_000` (an explicit `0`
+   is rejected, distinguished from an absent field), and an explicit `key_len` must
+   be `1..64`; the iterations lower bound is `>0` with no higher floor (acceptable
+   under the compiled-in trusted-policy model — the policy is not attacker-supplied).
+
+   `"iterations": "auto"` tries a **fixed, best-first candidate list**
+   `[500000, 75000]`: derive with each count, attempt Unlock, and advance to the next
+   candidate **only** on an Opal `NOT_AUTHORIZED` result (the new `opal.ErrNotAuthorized`
+   sentinel — "wrong iteration count, try the next"). It **stops immediately and fails
+   closed** on `AUTHORITY_LOCKED_OUT` (`opal.ErrAuthLockedOut`) — further tries are
+   futile and burn no more of the Admin1 try-limit — or on any other error (transport,
+   malformed; never masked by advancing), and fails closed on list exhaustion. This is
+   the **try-limit safety** rationale: best-first means the common case authenticates on
+   attempt #1 and burns no extra Admin1 tries; the list is kept small and fixed because a
+   large candidate list would be an unacceptable try-limit exposure for a pre-boot
+   product. The consumed seed and every derived key are zeroized on all paths (F-2
+   preserved: success, retry, lockout, other-error, exhaustion). The winning iteration
+   count is emitted only under the compile-time `hwdbg` gate — never in normal output.
+
+   **Operator contract.** A PBKDF2 credential is only reproducible if you know the
+   iteration count the provisioning sedutil used; the PBA **cannot** read it back from
+   the drive, so the operator must know (or discover via `auto`) that count. Known
+   values: the **lumentum fork / sedutil v1.15 = 500000**; **upstream older builds
+   (e.g. the lab host's 1.20.0) = 75000**. Prefer an explicit count for production
+   (deterministic, single try) and reserve `auto` for lab / bring-up / recovery where
+   the provisioning count is unknown. `auto` is what unblocks the A4b HW finding (a lab
+   drive provisioned by sedutil 1.20.0 at 75000 → `NOT_AUTHORIZED` against the hardcoded
+   500000).
 4. **Source menu, grouped by factor and graded by pre-boot feasibility.** The
    hard filter is the runtime: we run pre-`ExitBootServices`, so we get whatever
    the firmware exposes as a protocol (keyboard text-input, filesystem, network,
