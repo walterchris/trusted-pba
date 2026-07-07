@@ -17,6 +17,17 @@ const (
 // status. Callers must fail closed.
 var ErrMethod = errors.New("opal: method failed")
 
+// ErrNotAuthorized is the TCG NOT_AUTHORIZED (status 0x01) method result: the
+// credential did not authenticate. It wraps ErrMethod, so errors.Is(err, ErrMethod)
+// stays true. The sedutil-pbkdf2 auto loop uses it to distinguish "wrong credential,
+// try the next candidate" from a lockout or other error, which must stop immediately.
+var ErrNotAuthorized = fmt.Errorf("%w: not authorized (status 0x%02x)", ErrMethod, statusNotAuthorized)
+
+// ErrAuthLockedOut is the TCG AUTHORITY_LOCKED_OUT (status 0x12) method result: the
+// authority's try-limit is exhausted. It wraps ErrMethod. The auto loop must stop on
+// it and fail closed — further attempts are futile and burn no more tries.
+var ErrAuthLockedOut = fmt.Errorf("%w: authority locked out (status 0x%02x)", ErrMethod, statusAuthLockedOut)
+
 // buildMethod assembles a TCG method invocation:
 //
 //	Call <invoker> <method> StartList <args> EndList EndOfData StartList 0 0 0 EndList
@@ -128,10 +139,16 @@ func checkStatus(payload []byte) error {
 	if err != nil {
 		return err
 	}
-	if st != statusSuccess {
+	switch st {
+	case statusSuccess:
+		return nil
+	case statusNotAuthorized:
+		return ErrNotAuthorized
+	case statusAuthLockedOut:
+		return ErrAuthLockedOut
+	default:
 		return fmt.Errorf("%w: status 0x%02x", ErrMethod, st)
 	}
-	return nil
 }
 
 // syncSessionIDs parses a SyncSession result, returning the host and TPer session

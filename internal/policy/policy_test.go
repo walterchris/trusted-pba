@@ -47,6 +47,22 @@ func TestParseFailsClosed(t *testing.T) {
 		"unknown derive":              `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"scrypt"},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 		"credential unknown field":    `{"sed_unlock":"required","sed_credential":{"source":"console","extra":1},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 		"pin wrong json type":         `{"sed_unlock":"required","sed_credential":{"source":"policy-pin","pin":1},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		// derive_params (#112): valid only with sedutil-pbkdf2; iterations bounds;
+		// key_len bounds; the iterations union rejects garbage.
+		"derive_params on raw":           `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"raw","derive_params":{"iterations":500000}},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"derive_params on absent derive": `{"sed_unlock":"required","sed_credential":{"source":"console","derive_params":{"iterations":500000}},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"iterations zero":                `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2","derive_params":{"iterations":0}},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"iterations negative":            `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2","derive_params":{"iterations":-1}},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"iterations too large":           `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2","derive_params":{"iterations":100000001}},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"iterations bad string":          `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2","derive_params":{"iterations":"maybe"}},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"iterations bool":                `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2","derive_params":{"iterations":true}},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"iterations object":              `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2","derive_params":{"iterations":{"n":1}}},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"iterations float":               `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2","derive_params":{"iterations":500000.5}},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"iterations quoted number":       `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2","derive_params":{"iterations":"500000"}},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"iterations Auto wrong case":     `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2","derive_params":{"iterations":"Auto"}},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"key_len zero-invalid-with-neg":  `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2","derive_params":{"key_len":-1}},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"key_len too large":              `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2","derive_params":{"key_len":65}},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
+		"derive_params unknown field":    `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2","derive_params":{"rounds":1}},"entries":[{"name":"x","path":"a","validation":"pba"}]}`,
 	}
 	for name, in := range bad {
 		if _, err := Parse([]byte(in)); err == nil {
@@ -132,6 +148,70 @@ func TestParseSEDUnlock(t *testing.T) {
 	}
 	if p.SEDUnlock != SEDUnlockNone || p.SEDCredential != nil {
 		t.Errorf("got sed_unlock=%q credential=%v, want none without a credential", p.SEDUnlock, p.SEDCredential)
+	}
+}
+
+// TestParseDeriveParams covers the #112 derive_params schema: an explicit
+// iteration count and key_len parse and resolve; "auto" sets the auto flag; an
+// absent derive_params resolves to the defaults (backward compatibility).
+func TestParseDeriveParams(t *testing.T) {
+	base := func(dp string) string {
+		return `{"sed_unlock":"required","sed_credential":{"source":"console","derive":"sedutil-pbkdf2"` + dp + `},"entries":[{"name":"x","path":"a","validation":"pba"}]}`
+	}
+
+	// Explicit integer iterations + key_len.
+	p, err := Parse([]byte(base(`,"derive_params":{"iterations":75000,"key_len":32}`)))
+	if err != nil {
+		t.Fatalf("Parse explicit: %v", err)
+	}
+	count, auto := p.SEDCredential.ResolvedIterations()
+	if auto || count != 75000 {
+		t.Errorf("explicit iterations: got count=%d auto=%v, want 75000/false", count, auto)
+	}
+	if kl := p.SEDCredential.ResolvedKeyLen(); kl != 32 {
+		t.Errorf("explicit key_len resolved = %d, want 32", kl)
+	}
+
+	// "auto" mode.
+	p, err = Parse([]byte(base(`,"derive_params":{"iterations":"auto"}`)))
+	if err != nil {
+		t.Fatalf("Parse auto: %v", err)
+	}
+	count, auto = p.SEDCredential.ResolvedIterations()
+	if !auto || count != 0 {
+		t.Errorf(`"auto": got count=%d auto=%v, want 0/true`, count, auto)
+	}
+	if kl := p.SEDCredential.ResolvedKeyLen(); kl != 32 {
+		t.Errorf("auto default key_len resolved = %d, want 32 (default)", kl)
+	}
+
+	// Absent derive_params resolves to the defaults (no behavior change).
+	p, err = Parse([]byte(base(``)))
+	if err != nil {
+		t.Fatalf("Parse absent: %v", err)
+	}
+	if p.SEDCredential.DeriveParams != nil {
+		t.Errorf("absent derive_params must stay nil, got %+v", p.SEDCredential.DeriveParams)
+	}
+	count, auto = p.SEDCredential.ResolvedIterations()
+	if auto || count != 500000 {
+		t.Errorf("absent iterations: got count=%d auto=%v, want 500000/false (default)", count, auto)
+	}
+	if kl := p.SEDCredential.ResolvedKeyLen(); kl != 32 {
+		t.Errorf("absent key_len resolved = %d, want 32 (default)", kl)
+	}
+
+	// derive_params present with an absent iterations field means "use default count".
+	p, err = Parse([]byte(base(`,"derive_params":{"key_len":16}`)))
+	if err != nil {
+		t.Fatalf("Parse key_len only: %v", err)
+	}
+	count, auto = p.SEDCredential.ResolvedIterations()
+	if auto || count != 500000 {
+		t.Errorf("key_len only: got count=%d auto=%v, want 500000/false (default)", count, auto)
+	}
+	if kl := p.SEDCredential.ResolvedKeyLen(); kl != 16 {
+		t.Errorf("key_len only resolved = %d, want 16", kl)
 	}
 }
 

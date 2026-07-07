@@ -71,6 +71,46 @@ func TestSyncSessionIDsRejectsOversizeID(t *testing.T) {
 	}
 }
 
+// TestCheckStatusAuthSentinels covers #112: checkStatus must map the two
+// authentication statuses to the exported sentinels (so the sedutil-pbkdf2 auto
+// loop can tell "wrong credential, try next" from "locked out, stop"), and every
+// non-success status must still satisfy errors.Is(err, ErrMethod).
+func TestCheckStatusAuthSentinels(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		status      uint64
+		wantNotAuth bool // errors.Is(err, ErrNotAuthorized) must hold
+		wantLocked  bool // errors.Is(err, ErrAuthLockedOut) must hold
+	}{
+		{"not authorized", statusNotAuthorized, true, false},
+		{"authority locked out", statusAuthLockedOut, false, true},
+		{"generic failure", statusFail, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkStatus(resultStream(tc.status))
+			if err == nil {
+				t.Fatalf("status 0x%02x: want error, got nil", tc.status)
+			}
+			if !errors.Is(err, ErrMethod) {
+				t.Errorf("status 0x%02x: err %v must wrap ErrMethod", tc.status, err)
+			}
+			// The two auth sentinels must match only their own status and stay
+			// distinct from each other.
+			if got := errors.Is(err, ErrNotAuthorized); got != tc.wantNotAuth {
+				t.Errorf("status 0x%02x: errors.Is(ErrNotAuthorized) = %v, want %v", tc.status, got, tc.wantNotAuth)
+			}
+			if got := errors.Is(err, ErrAuthLockedOut); got != tc.wantLocked {
+				t.Errorf("status 0x%02x: errors.Is(ErrAuthLockedOut) = %v, want %v", tc.status, got, tc.wantLocked)
+			}
+		})
+	}
+
+	// Success must not produce an error.
+	if err := checkStatus(resultStream(statusSuccess)); err != nil {
+		t.Errorf("success status: want nil, got %v", err)
+	}
+}
+
 // syncSessionStream64 is syncSessionStream without the uint32 narrowing, so a test
 // can emit the out-of-range session ids a real device could send.
 func syncSessionStream64(status, hsn, tsn uint64) []byte {

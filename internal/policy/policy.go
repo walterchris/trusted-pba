@@ -119,12 +119,88 @@ const (
 // Credential is the SED unlock credential block (ADR-0011 §2), present only when
 // sed_unlock is "required". Source selects where the credential comes from; PIN
 // carries the compiled-in secret for the policy-pin source only; Derive is the
-// optional derivation stage (empty means raw).
+// optional derivation stage (empty means raw); DeriveParams tunes the sedutil-pbkdf2
+// derivation (#112) and is valid only when Derive is sedutil-pbkdf2.
 type Credential struct {
-	Source CredentialSource `json:"source"`
-	PIN    PIN              `json:"pin,omitempty"`    // policy-pin only
-	Path   string           `json:"path,omitempty"`   // keyfile only (ESP-relative)
-	Derive Derive           `json:"derive,omitempty"` // empty => raw
+	Source       CredentialSource `json:"source"`
+	PIN          PIN              `json:"pin,omitempty"`           // policy-pin only
+	Path         string           `json:"path,omitempty"`          // keyfile only (ESP-relative)
+	Derive       Derive           `json:"derive,omitempty"`        // empty => raw
+	DeriveParams *DeriveParams    `json:"derive_params,omitempty"` // sedutil-pbkdf2 only (#112)
+}
+
+// Default sedutil-pbkdf2 derive parameters (#112). These duplicate
+// credential.SedutilPBKDF2Iterations / credential.SedutilPBKDF2KeyLen deliberately:
+// the policy layer must not import internal/credential (ADR-0004 layering — policy
+// carries no crypto). Keep the two in sync; the credential package is authoritative.
+const (
+	defaultSedutilPBKDF2Iterations = 500000
+	defaultSedutilPBKDF2KeyLen     = 32
+	// maxSedutilPBKDF2Iterations bounds an explicit iteration count so a degenerate
+	// or absurd value is rejected at parse rather than driving a pathological
+	// derivation on the pre-boot path.
+	maxSedutilPBKDF2Iterations = 100_000_000
+	// maxSedutilPBKDF2KeyLen bounds an explicit key length (SHA-512 output is 64
+	// bytes; a longer PBKDF2 output only repeats the KDF pointlessly).
+	maxSedutilPBKDF2KeyLen = 64
+)
+
+// DeriveParams tunes the sedutil-pbkdf2 derivation (#112) so a deployment matches
+// whatever sedutil provisioned its drives without rebuilding the PBA. Both fields
+// are optional: an absent Iterations means the default count (or, with the "auto"
+// spec, the best-first candidate list); an absent KeyLen (zero) means the default.
+type DeriveParams struct {
+	// Iterations is the PBKDF2 iteration count: an explicit positive integer, or the
+	// string "auto" (try the known candidate counts best-first, ADR-0011 §3 / #112).
+	Iterations IterationSpec `json:"iterations,omitempty"`
+	// KeyLen is the derived-key length in bytes; zero (absent) means the default.
+	KeyLen int `json:"key_len,omitempty"`
+}
+
+// IterationSpec is the union type of the derive_params "iterations" field: either an
+// explicit positive Count, or Auto (the JSON string "auto"). The zero value (neither
+// set) means "absent" — the caller uses the default count. Auto and an explicit
+// Count are mutually exclusive; UnmarshalJSON sets exactly one.
+type IterationSpec struct {
+	// Auto is true when the policy requested the "auto" candidate-list mode.
+	Auto bool
+	// Count is the explicit iteration count when Auto is false and it was specified.
+	Count int
+	// present records whether the field was in the JSON at all (UnmarshalJSON only
+	// runs when present), distinguishing an explicit 0 — which validation must
+	// reject — from an absent field, which resolves to the default count.
+	present bool
+}
+
+// UnmarshalJSON decodes the iterations union: a JSON number becomes Count; the JSON
+// string "auto" (case-sensitive) sets Auto; anything else (other strings, bools,
+// objects, arrays, a quoted number) is a fail-closed error. It does not range-check
+// Count — that is validateSEDCredential's job, so the error names the field context.
+func (s *IterationSpec) UnmarshalJSON(b []byte) error {
+	s.present = true
+	// A JSON string (starts with '"') is only ever the literal "auto"; a quoted
+	// number like "500000" must be rejected, not silently coerced to a count.
+	if len(b) > 0 && b[0] == '"' {
+		var str string
+		if err := json.Unmarshal(b, &str); err != nil {
+			return fmt.Errorf("iterations string: %w", err)
+		}
+		if str != "auto" {
+			return fmt.Errorf(`iterations string must be "auto", got %q`, str)
+		}
+		s.Auto, s.Count = true, 0
+		return nil
+	}
+	var n json.Number
+	if err := json.Unmarshal(b, &n); err != nil {
+		return errors.New(`iterations must be a positive integer or the string "auto"`)
+	}
+	i, err := n.Int64()
+	if err != nil {
+		return fmt.Errorf("iterations must be an integer: %w", err)
+	}
+	s.Auto, s.Count = false, int(i)
+	return nil
 }
 
 // OnError is the terminal action taken on any fail-closed decision. Every option
@@ -266,7 +342,54 @@ func validateSEDCredential(p *Policy) error {
 	default:
 		return fmt.Errorf("unknown sed_credential derive %q", c.Derive)
 	}
+	// derive_params (#112) is only meaningful for sedutil-pbkdf2; a stray one on any
+	// other derive is a misconfiguration (dead knob), rejected fail-closed like the
+	// per-source stray-field rules above.
+	if c.DeriveParams != nil {
+		if c.Derive != DeriveSedutilPBKDF2 {
+			return fmt.Errorf("sed_credential derive_params is only valid with derive %q", DeriveSedutilPBKDF2)
+		}
+		dp := c.DeriveParams
+		if dp.Iterations.present && !dp.Iterations.Auto {
+			// An absent iterations field means the default; an explicit count must be
+			// positive and within a sane bound (an explicit 0 or negative is rejected).
+			if dp.Iterations.Count <= 0 || dp.Iterations.Count > maxSedutilPBKDF2Iterations {
+				return fmt.Errorf("sed_credential derive_params iterations %d out of range (1..%d)", dp.Iterations.Count, maxSedutilPBKDF2Iterations)
+			}
+		}
+		// key_len: absent (zero) means the default; an explicit value is bound-checked.
+		if dp.KeyLen != 0 && (dp.KeyLen < 1 || dp.KeyLen > maxSedutilPBKDF2KeyLen) {
+			return fmt.Errorf("sed_credential derive_params key_len %d out of range (1..%d)", dp.KeyLen, maxSedutilPBKDF2KeyLen)
+		}
+	}
 	return nil
+}
+
+// ResolvedKeyLen returns the sedutil-pbkdf2 derived-key length to use: the explicit
+// derive_params key_len, or the default when unset. Parse bound-checks any explicit
+// value, so this returns a validated length.
+func (c *Credential) ResolvedKeyLen() int {
+	if c.DeriveParams != nil && c.DeriveParams.KeyLen != 0 {
+		return c.DeriveParams.KeyLen
+	}
+	return defaultSedutilPBKDF2KeyLen
+}
+
+// ResolvedIterations returns the sedutil-pbkdf2 iteration count to use and whether
+// the policy requested "auto" mode. When auto is false, count is the explicit
+// derive_params value or the default when unset (Parse validates any explicit
+// value). When auto is true, count is 0 (the caller iterates its candidate list).
+func (c *Credential) ResolvedIterations() (count int, auto bool) {
+	if c.DeriveParams == nil {
+		return defaultSedutilPBKDF2Iterations, false
+	}
+	if c.DeriveParams.Iterations.Auto {
+		return 0, true
+	}
+	if c.DeriveParams.Iterations.Count != 0 {
+		return c.DeriveParams.Iterations.Count, false
+	}
+	return defaultSedutilPBKDF2Iterations, false
 }
 
 // Select returns the boot entry to use: the first (primary) entry. Selecting
