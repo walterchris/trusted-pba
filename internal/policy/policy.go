@@ -110,7 +110,7 @@ const (
 	// the default when derive is absent.
 	DeriveRaw Derive = "raw"
 	// DeriveSedutilPBKDF2 is sedutil's PBKDF2-HMAC-SHA1 derivation, interoperable
-	// with sedutil/lumentum-provisioned drives. It is a valid schema value here
+	// with sedutil-provisioned drives (incl. the customer fork). It is a valid schema value here
 	// but is not implemented until A4 (#104); selecting it fails closed at unlock
 	// time — the schema accepts it now to avoid a second migration.
 	DeriveSedutilPBKDF2 Derive = "sedutil-pbkdf2"
