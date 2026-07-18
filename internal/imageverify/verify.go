@@ -53,7 +53,18 @@ var (
 // image is trusted: its Authenticode hash is not revoked by dbx, its embedded
 // signature binds that hash, the signer chains to a db CA, and no certificate in
 // the chain is revoked by dbx. Any error means fail closed.
-func (v *Verifier) Verify(image []byte) error {
+func (v *Verifier) Verify(image []byte) (err error) {
+	// The go-uefi PE/Authenticode/PKCS#7 parsers run on attacker-controlled bytes
+	// and can panic on malformed structures (e.g. an out-of-range PE size field
+	// drives bytes.Buffer.Truncate out of range at checksum.go:179). A panic here
+	// must never crash the PBA: recover and fail closed as an unparseable image.
+	// See risk R-009 and FuzzVerify.
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%w: panic parsing image: %v", ErrParse, r)
+		}
+	}()
+
 	pe, err := authenticode.Parse(bytes.NewReader(image))
 	if err != nil {
 		return errors.Join(ErrParse, err)
