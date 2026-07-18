@@ -136,7 +136,7 @@ func unlockSED(pol *policy.Policy, env credential.Env, newTransports func() ([]o
 }
 
 // sedutilPBKDF2AutoIterations is the fixed best-first candidate list the
-// sedutil-pbkdf2 "auto" mode tries (#112). Best-first (the lumentum/v1.15 default
+// sedutil-pbkdf2 "auto" mode tries (#112). Best-first (the customer fork / v1.15 default
 // 500000 first) so the common case authenticates on attempt #1 and burns no extra
 // Admin1 try-limit; the older upstream default (75000) is only reached on a
 // genuinely non-default drive. Keep it small and fixed — extend only when a third

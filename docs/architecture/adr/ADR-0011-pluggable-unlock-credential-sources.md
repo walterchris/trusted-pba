@@ -118,7 +118,7 @@ TPM-backed sources and is the main cost driver.
    **Operator contract.** A PBKDF2 credential is only reproducible if you know the
    iteration count the provisioning sedutil used; the PBA **cannot** read it back from
    the drive, so the operator must know (or discover via `auto`) that count. Known
-   values: the **lumentum fork / sedutil v1.15 = 500000**; **upstream older builds
+   values: the **customer sedutil fork (v1.15) = 500000**; **upstream older builds
    (e.g. the lab host's 1.20.0) = 75000**. Prefer an explicit count for production
    (deterministic, single try) and reserve `auto` for lab / bring-up / recovery where
    the provisioning count is unknown. `auto` is what unblocks the A4b HW finding (a lab
