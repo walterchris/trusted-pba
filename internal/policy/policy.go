@@ -110,7 +110,7 @@ const (
 	// the default when derive is absent.
 	DeriveRaw Derive = "raw"
 	// DeriveSedutilPBKDF2 is sedutil's PBKDF2-HMAC-SHA512 derivation (salt = the
-	// drive's serial), interoperable with sedutil/lumentum-provisioned drives. The
+	// drive's serial), interoperable with sedutil-provisioned drives (incl. the customer fork). The
 	// iteration count and key length default to 500000/32 and are tunable via
 	// DeriveParams, including an "auto" mode (#104/#112). It needs a transport that
 	// exposes the drive serial (credential.Serialer, the NVMe-passthru carrier); it

@@ -88,7 +88,7 @@ the threat-model / risk-assessment change-log recorded alongside this record.
   with `%w`, and the sentinels are `fmt.Errorf("%w: …", ErrMethod, …)`, so `errors.Is` matches
   the sentinel through the full return path (`internal/opal` sentinel tests confirm).
 - **Try-limit safety via best-first + bounded fixed list.** `[500000, 75000]` puts the common
-  (lumentum/v1.15) count first, so the normal case authenticates on attempt #1 and burns no
+  (customer fork / v1.15) count first, so the normal case authenticates on attempt #1 and burns no
   extra Admin1 try; the list is fixed and small, bounding worst-case try consumption.
 - **F-2 zeroization on every path.** The consumed seed is scrubbed (deferred `clear(seed)`), and
   every derived key is `clear`ed on success, on retry (before the next candidate), on
