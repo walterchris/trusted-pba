@@ -27,7 +27,7 @@ interchangeable in strength:
 - **Keyfile** — a key read from a partition/ESP; operational simplicity.
 - **Console PIN entry** — interactive user secret; no secret stored at rest.
 - **TPM NVRAM, read-once** — secret released once per power cycle (the
-  customer lumentum-pba model: owner-auth NV + `ReadSTClear`).
+  customer PBA model: owner-auth NV + `ReadSTClear`).
 - **TPM PCR-sealed** — secret only unseals when measured-boot PCRs match,
   directly defending the evil-maid attacker (threat model §6.2): a tampered
   PBA/firmware cannot obtain the unlock secret.
@@ -38,7 +38,7 @@ change is **additive**: a credential-source abstraction in front of the existing
 unlock, not a rewrite of the Opal or transport layers.
 
 The dominant constraint is the runtime: we are bare-metal UEFI on TamaGo and
-have **no TPM stack today** (unlike lumentum-pba, which runs on Linux with
+have **no TPM stack today** (unlike the customer PBA, which runs on Linux with
 `go-tpm` + `/dev/tpmrm0`). A TamaGo TPM transport (TPM CRB/TIS MMIO, or command
 submission via `EFI_TCG2_PROTOCOL`) is a prerequisite building block for the two
 TPM-backed sources and is the main cost driver.
@@ -82,7 +82,7 @@ TPM-backed sources and is the main cost driver.
    sent raw; several sources yield a *seed* that must be turned into the drive
    credential. `derive` ∈ {`raw` (default, current behavior), `sedutil-pbkdf2`
    (`PBKDF2-HMAC-SHA512(seed, salt = the drive's 20-byte serial, 500000, 32B)` —
-   interoperable with sedutil/lumentum-provisioned drives)}. The parameters are
+   interoperable with sedutil-provisioned drives, incl. the customer fork)}. The parameters are
    parameterized because sedutil versions differ; A4a KAT-verified these values
    against the sedutil source in use (bit-identical to sedutil's `cf_pbkdf2_hmac`
    + `cf_sha512`). Any source composes with either convention.
@@ -169,7 +169,7 @@ TPM-backed sources and is the main cost driver.
 - **Default-on fallback chain (try TPM, else keyfile, else prompt).** Convenient
   but is a silent secure-to-insecure downgrade — forbidden by the same rule that
   killed implicit unlock in ADR-0009. Rejected as a default.
-- **Adopt lumentum's model wholesale (TPM NVRAM only).** A good baseline but
+- **Adopt the customer's model wholesale (TPM NVRAM only).** A good baseline but
   single-source and Linux-shaped; does not cover PCR-sealing (evil-maid) or
   no-TPM deployments. Taken as one menu entry, not the whole answer.
 
