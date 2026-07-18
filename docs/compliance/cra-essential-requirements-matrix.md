@@ -69,7 +69,9 @@ evidence · status · gaps.**
 - **Doc evidence:** ADR-0007, ADR-0006; threat model §6.1/TB2; risk R-001/R-012.
 - **Status:** Implemented (virtual).
 - **Gaps:** real Windows Boot Manager handoff is hardware/manual (R-007);
-  trust-anchor staleness (R-011); `imageverify` parser hardening tracked via fuzz.
+  trust-anchor staleness (R-011); `imageverify` parser hardening tracked via fuzz
+  (`FuzzVerify`; a 2026-07-18 nightly-fuzz finding — a go-uefi parser panic on a
+  malformed PE — is fixed by a `recover()`→`ErrParse` fail-closed backstop, R-009).
 
 ### ER-3 — Confidentiality of secrets
 - **Interpretation:** the unlock secret is never logged, lives only in pre-boot
@@ -164,7 +166,10 @@ evidence · status · gaps.**
 - **Implementation:** unit + `FuzzParse`/`FuzzResponseParse`/`FuzzVerify` +
   `pba-matrix` + `secureboot-matrix` + `mock-opal-integration` + harness self-test.
 - **Test evidence:** the CI jobs above (green on every PR); mutation-proofs in the
-  security-review records.
+  security-review records; the nightly `deep-fuzz` job found and drove the fix of a
+  real fail-closed defect (R-009 `imageverify.Verify` panic, 2026-07-18 —
+  `evidence/fuzzing-reports/2026-07-18-imageverify-fuzzverify-panic-R-009.md`),
+  demonstrating the testing process working.
 - **Doc evidence:** baseline §17; ADR-0005; test-tooling-plan.
 - **Status:** Implemented (virtual).
 - **Gaps:** SAST/dependency scanners still skeletons (#9); hardware tests (Phase 8).
