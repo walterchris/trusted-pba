@@ -46,7 +46,7 @@ by the product plan, not here).
 | Layer | Tool | What it validates | When |
 |------|------|-------------------|------|
 | 1 | Native Go Opal simulator (`MockTransport`) | Opal command/session logic, no UEFI | `go test ./...`, every change |
-| 2 | EDK2 `MockOpalDxe` driver in OVMF | PBA's real UEFI protocol path, locate + drive SSC protocol, full virtual unlock + chainload | PR CI (QEMU) — **primary virtual integration test** |
+| 2 | EDK2 `MockOpalDxe` driver in OVMF | PBA's real UEFI protocol path — **both product carriers** (locate + drive the SSC protocol, and locate + drive the NVMe pass-thru protocol incl. Identify-serial salt, #110), full virtual unlock + chainload | PR CI (QEMU) — **primary virtual integration test** |
 | 3 | QEMU virtual SED device model | firmware SSC mapping, Shadow-MBR block visibility, in-session MBRDone | **Later phase**, after architecture proven |
 | 4 | Real SED hardware | real firmware/drive behavior, compatibility matrix | Nightly/release (see product plan §Phase 8) |
 
@@ -73,6 +73,28 @@ implementations are validated against them.
 QEMU/OVMF (from the ESP or built into the OVMF image). Must be able to simulate
 both success and failure so the PBA can be shown to **fail closed** on Opal
 failure.
+
+**Extended (2026-07-19, #110): NVMe pass-thru surface.** The driver additionally
+produces `EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL` on the **same handle**, so the one
+mock now covers **both product transport carriers**: Identify Controller returns
+a scripted 20-byte serial (`"TPBA-MOCK-0001      "`, space-padded — the
+sedutil-pbkdf2 PBKDF2 salt)
+and Security Send/Receive (`0x81`/`0x82`) dispatch into the **shared** scripted
+TPer with the ComID in **native TCG order** (no swap — the product NVMe
+carrier's contract), while the Storage Security surface keeps its swap
+(mirroring the real firmware marshalling difference). A second accepted Admin1
+credential — the PBKDF2 derivation of the shared-spec passphrase at 75000
+iterations — models a hash-provisioned drive; it is drift-guarded against the
+KAT-verified `SedutilPBKDF2` primitive by `TestMockDerivedKeySync`
+(`internal/credential`). New `auth-lockout` fault (StartSession →
+`AUTHORITY_LOCKED_OUT 0x12`) and `MOCKOPAL: startsession N` attempt markers
+support try-limit assertions. **Decision:** extend the existing driver rather
+than build a separate `MockNvmePassThru` driver or start the QEMU device model
+(§3.7 stays **deferred**) — one shared TPer keeps the two carriers behaviourally
+consistent via the shared spec (§3.2), and because QEMU exposes no pass-thru
+protocol without a real `-device nvme`, omitting the driver yields a true
+zero-instance "no pass-thru handle → hard fail" negative
+(`test/qemu/nvme-opal-matrix.sh`, CI job `qemu-nvme-matrix`).
 
 ### 3.4 OVMF + Secure Boot test key material (`test/qemu/ovmf/`, `test/qemu/keys/`)
 Test `PK`/`KEK`/`db`/`dbx` and OVMF variable stores (`OVMF_CODE.fd`,
