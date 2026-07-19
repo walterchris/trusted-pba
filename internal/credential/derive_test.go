@@ -69,6 +69,36 @@ func TestSedutilPBKDF2KnownAnswer(t *testing.T) {
 	}
 }
 
+// TestMockDerivedKeySync guards the MockOpalDxe NVMe/sedutil-pbkdf2 constants
+// (#110) against drift: the driver's mAdmin1DerivedKey must equal
+// SedutilPBKDF2(shared-spec passphrase, mNvmeSerial, 75000, 32). The mock is
+// provisioned at 75000 — the upstream-sedutil default — so the auto candidate
+// list [500000, 75000] must advance past its first candidate in the QEMU
+// matrix. If this test and test/edk2-mock-opal/MockOpalDxe.c disagree, the
+// nvme-opal matrix fails auth; fix the driver constant, not this vector.
+func TestMockDerivedKeySync(t *testing.T) {
+	t.Parallel()
+	// Byte-for-byte the driver's mNvmeSerial / mAdmin1DerivedKey. A public test
+	// vector (PBKDF2 of the committed shared-spec passphrase over a fictitious
+	// serial), not a secret — named like the sibling katExpectedHex.
+	mockSerial := []byte("TPBA-MOCK-0001      ")
+	const mockExpectedHex = "0af58503b7d9b1baba483052a33c35459df434c2b332b98f967e25998090057f"
+	if len(mockSerial) != 20 {
+		t.Fatalf("mock serial length = %d, want 20", len(mockSerial))
+	}
+	want, err := hex.DecodeString(mockExpectedHex)
+	if err != nil {
+		t.Fatalf("decode expected: %v", err)
+	}
+	got, err := SedutilPBKDF2(bytes.Clone(katSeed), mockSerial, 75000, 32)
+	if err != nil {
+		t.Fatalf("SedutilPBKDF2: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("derived key = %x, want %x (MockOpalDxe.c mAdmin1DerivedKey)", got, want)
+	}
+}
+
 // TestSedutilPBKDF2FailsClosedOnBadParams covers the #112 defensive guards: a
 // non-positive iteration count or key length must never derive a degenerate
 // credential, even though the policy layer also validates them.

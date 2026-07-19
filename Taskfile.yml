@@ -122,7 +122,7 @@ tasks:
       - >-
         objcopy -j .text -j .sdata -j .data -j .dynamic -j .dynsym
         -j '.rel.*' -j '.rela.*' -j .rel -j .rela -j .reloc
-        --target efi-app-x86_64 {{.BIN}}/testapp.so {{.BIN}}/testapp.efi
+        --output-target efi-app-x86_64 {{.BIN}}/testapp.so {{.BIN}}/testapp.efi
       - echo "built {{.BIN}}/testapp.efi"
 
   run:
@@ -188,6 +188,15 @@ tasks:
         vars: { OUT: '{{.APP}}-sedtest', EXTRA_TAGS: ",sedtest" }
       - test/qemu/mock-opal-matrix.sh {{.BIN}}/{{.APP}}-sedtest.efi {{.BIN}}/testapp.efi
 
+  nvme-opal-matrix:
+    desc: 'NVMe-passthru Opal matrix (#110) — sedutil-pbkdf2 auto unlock over EFI_NVM_EXPRESS_PASS_THRU (Identify salt + Security Send/Recv session): POS (auto advances 500000→75000 → unlock + chainload) + NEG (auth-lockout stops after one try; no driver → hard fail). Headless/CI-safe. Needs EDK2 build deps + virt-firmware.'
+    cmds:
+      - test/edk2-mock-opal/build.sh
+      - task: testapp
+      - task: _efi
+        vars: { OUT: '{{.APP}}-sednvmetest', EXTRA_TAGS: ",sednvmetest,hwdebug" }
+      - test/qemu/nvme-opal-matrix.sh {{.BIN}}/{{.APP}}-sednvmetest.efi {{.BIN}}/testapp.efi
+
   console-matrix:
     desc: 'Console credential-source matrix (ADR-0011 A2, #99) — automated QMP send-key injection: POS (correct horse → unlock ok) + NEG (wrong pass → fail closed). Headless/CI-safe; no human keystrokes. Needs EDK2 build deps + virt-firmware.'
     cmds:
@@ -240,7 +249,7 @@ tasks:
       - >-
         objcopy -j .text -j .sdata -j .data -j .dynamic -j .dynsym
         -j '.rel.*' -j '.rela.*' -j .rel -j .rela -j .reloc
-        --target efi-app-x86_64 {{.BIN}}/tpmread.so {{.BIN}}/tpmread.efi
+        --output-target efi-app-x86_64 {{.BIN}}/tpmread.so {{.BIN}}/tpmread.efi
       - echo "built {{.BIN}}/tpmread.efi"
 
   override-pcr:

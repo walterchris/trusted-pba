@@ -320,6 +320,55 @@ jobs:
           name: mock-opal-serial-log
           path: mock-opal-serial.log
 
+  # NVMe-passthru Opal matrix (#110): the sedutil-pbkdf2-over-NVMe unlock —
+  # MockOpalDxe's EFI_NVM_EXPRESS_PASS_THRU surface (Identify salt + Security
+  # Send/Receive session) + the `-tags sednvmetest,hwdebug` PBA. POS proves the
+  # #112 auto path end-to-end (advance 500000→75000); NEGs prove try-limit stop
+  # on lockout and hard fail with zero pass-thru handles.
+  qemu-nvme-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install QEMU, OVMF, mtools, gnu-efi, openssl/uuid + EDK2 build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 ovmf mtools gnu-efi openssl uuid-runtime \
+            python3-pip build-essential nasm acpica-tools uuid-dev
+      - name: Install virt-firmware (virt-fw-vars)
+        run: pip install --user --break-system-packages 'virt-firmware==26.5.4'
+      - name: Install go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cache pinned TamaGo toolchain
+        uses: actions/cache@v4
+        with:
+          path: ~/.tamago
+          key: tamago-${{ runner.os }}-${{ hashFiles('Taskfile.yml') }}
+      # Same key strategy as qemu-opal-matrix: covers the EDK2 pin and driver
+      # sources; restore-keys reuses the expensive edk2 clone + BaseTools build.
+      - name: Cache pinned EDK2 tree (BaseTools + driver build)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/tpba-edk2
+          key: tpba-edk2-${{ hashFiles('test/edk2-mock-opal/build.sh', 'test/edk2-mock-opal/MockOpalDxe.*', 'test/edk2-mock-opal/MockOpalPkg.*', 'test/edk2-mock-opal/Discovery0Locked.h') }}
+          restore-keys: |
+            tpba-edk2-
+      - name: NVMe-passthru Opal matrix (build driver + sednvmetest PBA + fixture, run all scenarios)
+        shell: bash
+        run: |
+          set -o pipefail
+          task nvme-opal-matrix | tee nvme-opal-serial.log
+      - name: Upload serial log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvme-opal-serial-log
+          path: nvme-opal-serial.log
+
   # pba-override trust broker (ADR-0012/0013, -tags trustbroker). Guards the merged
   # Secure Boot override: CONTROL (firmware rejects the out-of-db, PBA-verified
   # fixture), POS (override arms for exactly that buffer -> boots), TAMPER (unsigned
