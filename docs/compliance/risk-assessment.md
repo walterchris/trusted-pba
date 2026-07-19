@@ -38,7 +38,7 @@ secret).
 | R-007 | Windows Boot Manager chainload fails after unlock | A6 | A | Medium | High | **Medium** | Partial — virtual only |
 | R-008 | MBRDone does not take effect until reboot | A7 | A/I | Medium | High | **Medium** | Partial — virtual e2e (Phase 6 mock matrix); hardware timing Phase 8 |
 | R-009 | Opal/PE command parser accepts malformed response | A7/A6 | I/A | Medium | High | **Low** | Mitigated (parsers fuzzed, fail closed) |
-| R-010 | QEMU tests pass but real SED differs | — | I/A | High | High | **Medium** | Open — Phase 8 |
+| R-010 | QEMU tests pass but real SED differs | — | I/A | High | High | **Medium** | Open — Phase 8; NVMe-carrier CI path + mock wrong-credential fidelity fix (#110) narrow the gap |
 | R-011 | Embedded trust anchors go stale (2011 CAs expire 2026-06-27) | A5 | I/A | High | High | **Medium** | Open — ADR-gated refresh |
 | R-012 | TOCTOU: target re-read after verification (SB-off) | A6 | I | Low | High | **Low** | Mitigated (verified-buffer load, #46) |
 | R-013 | Expired-but-valid signing key reused (expiry ignored) | A6 | I | Low | High | **Low** | Accepted — control is dbx; #48 |
@@ -120,7 +120,15 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
   validation**; `run()` selects that carrier **only** for the `sedutil-pbkdf2`
   derive (nil-`SEDCredential` guarded) and fails closed on zero carriers /
   unresolved handles / host build / `Serial()` error — no cross-carrier fallback,
-  the raw/Storage-Security path unchanged. The operative residual is
+  the raw/Storage-Security path unchanged. **QEMU end-to-end (#110):** the
+  `nvme-opal-matrix` drives the real NVMe-passthru carrier against MockOpalDxe's
+  new pass-thru surface (Identify-serial salt + Security Send/Receive session,
+  native ComID order) — POS: `auto` advances 500000→75000 (attempt 1
+  `NOT_AUTHORIZED`, attempt 2 authenticates; a hwdbg marker pins the winning
+  count) → unlock → MBRDone → chainload; NEG `auth-lockout`: the loop stops
+  after attempt 1 (FORBID on `startsession 2` — the try-limit safety proven
+  end-to-end, no longer only in host unit tests with fakes); NEG no-driver:
+  zero pass-thru handles → hard fail-closed, no boot. The operative residual is
   **R-010/R-007/R-008** (real-drive divergence; HW validation pending). The
   consumed seed and the new derived key are
   zeroized on every path (F-2 closed). **Accepted residual:** the `crypto/pbkdf2.Key`
@@ -137,7 +145,8 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
   **Tests:** `TestUnlockHappyPath`, `TestUnlockFailsClosed/*`;
   `cmd/pba` `TestUnlockSED*`; `internal/policy` `TestParseSEDUnlock`;
   `mock-opal-matrix` (6 scenarios) + `harness-selftest.sh` (CI job
-  `mock-opal-integration`).
+  `mock-opal-integration`); `nvme-opal-matrix` (POS auto-advance + NEG
+  auth-lockout/no-driver, CI job `qemu-nvme-matrix`, #110).
   **Evidence:** ADR-0004, ADR-0009;
   `evidence/security-review-records/2026-06-10-mock-opal-integration-matrix-22.md`.
   **Owner:** Security Owner.
@@ -278,7 +287,30 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 - **Threat/path:** behavioral gap between mock/QEMU and real hardware causes an
   unsafe state in the field.
 - **Mitigations:** virtual-first strategy (ADR-0005); documented mock equivalents;
-  gated hardware bring-up (Phase 8). **Residual:** Medium. **Tests:** QEMU matrices.
+  gated hardware bring-up (Phase 8). **NVMe-carrier virtual coverage (#110):**
+  the sedutil-pbkdf2-over-NVMe unlock — previously provable only on hardware
+  (2026-07-06 A4b entry) — now has a deterministic CI path (`nvme-opal-matrix`,
+  CI job `qemu-nvme-matrix`) exercising the **real product carrier code**
+  end-to-end: locate `EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL` handles, command-packet
+  marshalling via go-boot, Identify-Controller serial as the PBKDF2 salt, and
+  the no-ComID-swap Opal session, against MockOpalDxe's pass-thru surface.
+  **Mock-fidelity fix (#110):** both mocks (host `MockTPer` and the EDK2 driver)
+  returned `AUTHORITY_LOCKED_OUT` (`0x12`) for a *wrong credential*, where real
+  drives return `NOT_AUTHORIZED` (`0x01` — observed on lab hardware, and the
+  status the #112 `auto` mode advances on): an actual mock/real divergence of
+  exactly this risk's class — with the old behavior a MockTPer-backed `auto`
+  test would have wrongly *stopped* instead of advancing. Both mocks + the
+  shared spec (`test/fixtures/opal/README.md`) now return `0x01` for
+  wrong-credential; `0x12` is an explicit `auth-lockout` fault shape, so the
+  mocks no longer conflate the two statuses (supersedes the #112 residual note).
+  The mock's hash-provisioned credential is drift-guarded against the
+  KAT-verified `SedutilPBKDF2` primitive (`TestMockDerivedKeySync`).
+  **Residual:** Medium — unchanged: the mocks are still not a real drive
+  (real-drive `NOT_AUTHORIZED`-vs-lockout *timing*, Discovery0-over-NVMe on real
+  firmware, and in-session MBRDone remain Phase-8 hardware items).
+  **Tests:** QEMU matrices (`mock-opal-matrix`, `nvme-opal-matrix`,
+  `pba-matrix`, `secureboot-matrix`, `keyfile-matrix`, …); `TestMockDerivedKeySync`.
+  **Evidence:** `evidence/test-reports/2026-07-19-nvme-opal-matrix-110.md`.
 
 ### R-011 — Embedded trust anchors go stale
 - **Threat/path:** the embedded `db`/`dbx` ages; notably the *Microsoft Corporation
@@ -346,3 +378,4 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 | 2026-07-18 | **R-009 — `imageverify.Verify` panic-to-error backstop (#114, `fix/imageverify-parse-panic`).** The nightly `deep-fuzz (./internal/imageverify, FuzzVerify)` job on `main` (GitHub Actions run 29632495833) found a malformed PE with an out-of-range size field that panicked *inside* the third-party `go-uefi/authenticode` parser (`bytes.Buffer.Truncate` out of range at `checksum.go:179`, reached from `verify.go:57`) instead of returning an error — a fail-closed / no-panic contract violation (the contract stated in `fuzz_test.go` and baseline §12). `Verify` now uses a named return + `defer`/`recover()` that converts **any** panic from the go-uefi parse/verify path into an `ErrParse`-wrapped error ("panic parsing image: …"), so a crafted attacker-supplied ESP image fails closed (do-not-boot) rather than crashing the PBA. The exact crasher is committed as a permanent regression seed (`internal/imageverify/testdata/fuzz/FuzzVerify/30950a34c9c628dc`); crasher passes, package tests green, fresh 30s `FuzzVerify` burst clean, gofmt/vet/lint clean. **Severity Low** — a crash still fails closed w.r.t. booting untrusted code (no C/I bypass), the impact is a pre-boot availability/DoS and the contract violation; found pre-release, no shipped versions ⇒ no CVD/advisory (baseline §15). **Hardening only, no change to the trust decision ⇒ no ADR** (baseline §23). **No rating change** (R-009 residual stays Low; mitigation strengthened). Evidence: `evidence/fuzzing-reports/2026-07-18-imageverify-fuzzverify-panic-R-009.md`. |
 | 2026-07-05 | **R-001/R-004 — release policy gate broadened (#90).** The release-only gate (`policy.CheckReleaseReady`, run by `release.yml`) previously blocked only `sed_unlock:"none"`; a release built from the dev default (`require_secure_boot:false` + firmware-mode `EFI/TEST/…` target) would have booted any ESP image with Secure Boot off (firmware mode does no PBA-side validation). The gate now also requires enforcing Secure Boot (an *absent* `require_secure_boot` is treated as unsafe — the opposite default from `sed_unlock`) and rejects a test-fixture target (normalized against `\`/`.`/`//`/leading-`/` variants). Reduces the R-001/R-004 release-time residual; no rating change (residual was already Low; boot path and dev-build behavior unchanged, PR CI unaffected — the gate runs only at release). Table-tested (`TestCheckReleaseReady`); independent security review APPROVE. Review record: `evidence/security-review-records/2026-07-05-release-gate-hardening-90.md`. |
 | 2026-07-07 | **Configurable `sedutil-pbkdf2` iterations + `auto` mode (#112, within ADR-0011 §3).** R-002/R-003 derive bullet extended: the `sedutil-pbkdf2` iteration count + key length are now **policy-configurable** via `sed_credential.derive_params` (`iterations: <int>\|"auto"`, `key_len`). **Absent → defaults 500000/32, byte-for-byte identical to the pre-#112 behavior**; SHA-512 unchanged; validation fail-closed (stray `derive_params` on non-sedutil derives, explicit iterations outside 1..100_000_000 incl. explicit-0, key_len outside 1..64). `auto` tries a fixed best-first list `[500000, 75000]`, advancing only on Opal `NOT_AUTHORIZED` (`opal.ErrNotAuthorized`) and **stopping closed on `AUTHORITY_LOCKED_OUT`** (`opal.ErrAuthLockedOut`) / any other error / exhaustion — **try-limit-safe** (best-first burns no extra Admin1 try in the common case); F-2 preserved (seed + every derived key zeroized on all paths). Motivated by the A4b HW iteration mismatch (lab sedutil 1.20.0 at 75000 vs hardcoded 500000). The **unlock-before-auth invariant is structural and iteration-independent**; two independent reviews (go-reviewer + security-review-agent) APPROVE (go-reviewer nits applied). Within the already-Accepted ADR-0011 §3 (no new ADR gate). **No rating change** (R-002 Medium, R-003 Low). Residuals: operator must know the provisioning iteration count (PBA cannot read it back; `auto` discovers it — customer fork / v1.15 = 500000, upstream older e.g. 1.20.0 = 75000); real-drive `NOT_AUTHORIZED`-vs-lockout timing is an R-010/Phase-8 item (MockTPer conflates them). Review record: `evidence/security-review-records/2026-07-07-configurable-sedutil-iterations-112.md`. |
+| 2026-07-19 | **QEMU NVMe-passthru Opal matrix + mock wrong-credential fidelity fix (#110, branch `feat/nvme-opal-matrix-110`; test tooling + mock-fidelity only, NO product code change).** **R-010:** MockOpalDxe now also produces `EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL` on the same handle (Identify Controller with the scripted 20-byte serial = the sedutil-pbkdf2 salt; Security Send/Receive `0x81`/`0x82` into the shared TPer, ComID in native order — the product NVMe carrier's contract), and the new `nvme-opal-matrix` (CI job `qemu-nvme-matrix`, `-tags sednvmetest,hwdebug` PBA, embedded test policy: policy-pin + `sedutil-pbkdf2` + `iterations:"auto"` + `on_error:halt`) exercises the **real product NVMe-passthru carrier code** deterministically in CI — previously provable only on hardware. **Mock-fidelity fix (R-010-relevant):** both mocks (host `MockTPer` + EDK2 driver) returned `AUTHORITY_LOCKED_OUT` (`0x12`) for a wrong credential; real drives return `NOT_AUTHORIZED` (`0x01`, observed on lab HW) — a genuine mock/real divergence under which a MockTPer-backed `auto`-mode test would have wrongly stopped instead of advancing. Both mocks + the shared spec now use `0x01` for wrong-credential; `0x12` is an explicit `auth-lockout` fault (supersedes the #112 "MockTPer conflates them" residual note; real-drive *timing* stays a Phase-8 item). **R-002:** the #112 `auto` try-limit safety is now proven **end-to-end in QEMU** — POS advance 500000→75000 → unlock → MBRDone → chainload over `EFI_NVM_EXPRESS_PASS_THRU`; NEG `auth-lockout` stops after attempt 1 (FORBID `startsession 2` + boot markers); NEG no-driver → hard fail-closed, no boot. All 3 scenarios PASS locally (2026-07-19); regressions `mock-opal-matrix` 6/6 and `keyfile-matrix` 2/2 PASS with the shared driver changes; the mock's 75000-iteration derived credential is drift-guarded by `TestMockDerivedKeySync` against the KAT-verified `SedutilPBKDF2`. **No rating change** (R-010 Medium, R-002 Medium — coverage strengthened, hardware validation still pending). **No new ADR** — test tooling within ADR-0005's virtual-first strategy and the already-Accepted ADR-0011 §3 semantics; no product behavior change. CRA matrix: **no impact** (ER-10 status unchanged; the matrix adds to its existing virtual-testing evidence). Two independent reviews (go-reviewer + security-review-agent) APPROVE, no changes. Review record: `evidence/security-review-records/2026-07-19-nvme-opal-matrix-110.md`; test evidence: `evidence/test-reports/2026-07-19-nvme-opal-matrix-110.md`. |
