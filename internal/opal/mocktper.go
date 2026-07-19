@@ -183,7 +183,10 @@ func (m *MockTPer) startSession(toks []token) []byte {
 		return resultStream(statusNotAuthorized)
 	}
 	if auth != uidAuthAdmin1 || !bytes.Equal(pin, m.PIN) {
-		return syncSessionStream(statusAuthLockedOut, hsn, 0)
+		// Wrong credential → NOT_AUTHORIZED (0x01), the real-drive wrong-PIN shape
+		// (observed on hardware: an iteration-count mismatch yields 0x01, and the
+		// #112 auto mode advances only on it). Mirrors MockOpalDxe.c.
+		return syncSessionStream(statusNotAuthorized, hsn, 0)
 	}
 	m.hsn = hsn
 	m.tsn = 0x1000

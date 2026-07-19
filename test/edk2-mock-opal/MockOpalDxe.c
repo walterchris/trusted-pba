@@ -7,6 +7,15 @@
   LocateProtocol (see internal/transport/uefi_tamago.go), so no device path or
   block-IO stack is needed.
 
+  The same handle also carries EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL (#110), the
+  carrier of the PBA's NVMe-passthru transport (internal/transport/nvme_tamago.go):
+  Security Send (0x81) / Security Receive (0x82) admin commands dispatch into the
+  SAME scripted TPer, and Identify Controller (0x06, CNS=1) returns a scripted
+  20-byte serial — the sedutil-pbkdf2 PBKDF2 salt. ComID order differs by design:
+  the Storage Security path un-swaps SPSP (MOCK_COMID), the NVMe path takes it in
+  native TCG order — mirroring the real firmware marshalling difference the two
+  product carriers encode.
+
   Behaviour is kept byte-for-byte consistent with the native Go simulator
   (internal/opal/mocktper.go) via the shared spec and golden fixtures in
   test/fixtures/opal/: same UIDs, token encoding, ComPacket framing, status
@@ -33,6 +42,7 @@
 #include <Library/BaseMemoryLib.h>
 #include <Library/IoLib.h>
 #include <Protocol/StorageSecurityCommand.h>
+#include <Protocol/NvmExpressPassthru.h>
 
 #include "Discovery0Locked.h"
 
@@ -106,11 +116,48 @@ STATIC CONST UINT8  mUidMBRControl[8]         = { 0x00, 0x00, 0x08, 0x03, 0x00, 
 STATIC CONST UINT8  mAdmin1Pin[]  = { 'c', 'o', 'r', 'r', 'e', 'c', 't', ' ', 'h', 'o', 'r', 's', 'e' };
 
 //
+// NVMe pass-thru surface (#110) — admin opcodes the mock implements. Values from
+// the NVMe Base spec; kept as local constants like the other wire constants.
+//
+#define MOCK_NVME_IDENTIFY       0x06
+#define MOCK_NVME_SECURITY_SEND  0x81
+#define MOCK_NVME_SECURITY_RECV  0x82
+#define MOCK_NVME_CNS_CTRL       0x01    // Identify Controller
+#define MOCK_NVME_SERIAL_OFF     4       // SN offset in Identify Controller data
+#define MOCK_NVME_SERIAL_LEN     20
+
+// Scripted drive serial — Identify Controller bytes 4..23, space-padded ASCII
+// exactly as a real drive reports it (and as go-boot SerialNumber returns it,
+// untrimmed). It is the sedutil-pbkdf2 PBKDF2 salt.
+STATIC CONST CHAR8  mNvmeSerial[MOCK_NVME_SERIAL_LEN + 1] = "TPBA-MOCK-0001      ";
+
+// Admin1 credential of the hash-provisioned drive shape (#110/#112): the drive
+// was provisioned by a sedutil that hashed the passphrase, so the credential the
+// TPer expects is the PBKDF2 output, not the raw PIN. Provisioned at 75000
+// iterations (the upstream-sedutil default, e.g. the lab's 1.20.0) so the auto
+// candidate list [500000, 75000] must ADVANCE past its first candidate — the
+// exact real-world shape that motivated #112.
+//
+//   PBKDF2-HMAC-SHA512("correct horse", mNvmeSerial[0:20], 75000, 32)
+//
+// Generated with:
+//   python3 -c 'import hashlib; print(hashlib.pbkdf2_hmac("sha512",
+//     b"correct horse", b"TPBA-MOCK-0001      ", 75000, dklen=32).hex())'
+// Guarded against drift by TestMockDerivedKeySync (internal/credential).
+STATIC CONST UINT8  mAdmin1DerivedKey[32] = {
+  0x0A, 0xF5, 0x85, 0x03, 0xB7, 0xD9, 0xB1, 0xBA, 0xBA, 0x48, 0x30, 0x52,
+  0xA3, 0x3C, 0x35, 0x45, 0x9D, 0xF4, 0x34, 0xC2, 0xB3, 0x32, 0xB9, 0x8F,
+  0x96, 0x7E, 0x25, 0x99, 0x80, 0x90, 0x05, 0x7F
+};
+
+//
 // Fault injection, selected by the MockOpalFault UEFI variable.
 //
 typedef enum {
   MockFaultNone,         // normal operation
-  MockFaultAuthFail,     // every StartSession fails (wrong-PIN shape)
+  MockFaultAuthFail,     // every StartSession fails (wrong-PIN shape, NOT_AUTHORIZED)
+  MockFaultAuthLockout,  // every StartSession fails AUTHORITY_LOCKED_OUT (0x12) —
+                         // the try-limit-exhausted shape (#112 auto must STOP)
   MockFaultMbrDoneFail,  // MBRControl Set returns NOT_AUTHORIZED (method-status failure)
   MockFaultAfterUnlock   // GlobalRange Set succeeds; every IF-SEND afterwards
                          // fails at transport level (EFI_DEVICE_ERROR) —
@@ -504,6 +551,12 @@ DecodeFrame (
 // HandleStartSession parses StartSession (Call SMUID StartSession StartList
 // HSN SPID Write [StartName name val EndName]...), validates the Admin1
 // credential, and on success opens the session.
+// mStartSessionCount numbers the StartSession attempts this boot ("MOCKOPAL:
+// startsession N" markers, capped at 9) so a matrix can FORBID a second attempt
+// — the try-limit assertion for the auto iteration mode (#112: lockout and
+// non-auth errors must stop the loop, never burn another Admin1 try).
+STATIC UINT32  mStartSessionCount = 0;
+
 STATIC
 VOID
 HandleStartSession (
@@ -517,7 +570,13 @@ HandleStartSession (
   UINTN        PinLen;
   CONST UINT8  *Auth;
   UINTN        I;
+  BOOLEAN      CredOk;
   BOOLEAN      AuthOk;
+  CHAR8        Attempt[] = "MOCKOPAL: startsession 0\r\n";
+
+  mStartSessionCount++;
+  Attempt[23] = (CHAR8)('0' + ((mStartSessionCount <= 9) ? mStartSessionCount : 9));
+  SerialStr (Attempt);
 
   if (NumToks < 7 || !IsCtrl (&Toks[3], TOK_START_LIST) || !Toks[4].IsInt || !Toks[5].IsBytes) {
     ResultStream (B, STS_NOT_AUTHORIZED);
@@ -545,15 +604,34 @@ HandleStartSession (
     }
   }
 
-  // Only Admin1 is provisioned; the credential must match; the auth-fail
-  // fault rejects every attempt (wrong-PIN shape).
+  // auth-lockout fault: the try-limit-exhausted drive — every StartSession is
+  // AUTHORITY_LOCKED_OUT regardless of credential. The auto iteration mode must
+  // stop immediately (no second attempt; asserted via the startsession markers).
+  if (mFault == MockFaultAuthLockout) {
+    SerialStr ("MOCKOPAL: auth lockout\r\n");
+    SyncSessionStream (B, STS_AUTH_LOCKED_OUT, Hsn, 0);
+    return;
+  }
+
+  // Only Admin1 is provisioned. Two credentials authenticate, modelling one
+  // drive reachable over two carriers: the raw canonical PIN (the no-hash
+  // `sedutil -n` provisioning the Storage Security matrix uses) and the
+  // PBKDF2-derived key of the hash-provisioned shape (the NVMe/sedutil-pbkdf2
+  // matrix, #110). The auth-fail fault rejects every attempt (wrong-PIN shape).
+  CredOk = (BOOLEAN)(Pin != NULL &&
+                     ((PinLen == sizeof (mAdmin1Pin) &&
+                       CompareMem (Pin, mAdmin1Pin, PinLen) == 0) ||
+                      (PinLen == sizeof (mAdmin1DerivedKey) &&
+                       CompareMem (Pin, mAdmin1DerivedKey, PinLen) == 0)));
   AuthOk = (BOOLEAN)(mFault != MockFaultAuthFail &&
                      Auth != NULL && CompareMem (Auth, mUidAuthAdmin1, 8) == 0 &&
-                     PinLen == sizeof (mAdmin1Pin) &&
-                     Pin != NULL && CompareMem (Pin, mAdmin1Pin, PinLen) == 0);
+                     CredOk);
   if (!AuthOk) {
+    // Wrong credential → NOT_AUTHORIZED (0x01), the real-drive wrong-PIN shape
+    // (observed on hardware, and the status the #112 auto mode advances on).
+    // Mirrors internal/opal/mocktper.go startSession.
     SerialStr ("MOCKOPAL: auth fail\r\n");
-    SyncSessionStream (B, STS_AUTH_LOCKED_OUT, Hsn, 0);
+    SyncSessionStream (B, STS_NOT_AUTHORIZED, Hsn, 0);
     return;
   }
 
@@ -669,31 +747,28 @@ HandlePayload (
 }
 
 //
-// EFI_STORAGE_SECURITY_COMMAND_PROTOCOL implementation.
+// Carrier-neutral TPer entry points. Both product carriers — the Storage
+// Security protocol and the NVMe pass-thru Security Send/Receive — funnel into
+// these with the LOGICAL (native TCG) ComID; only the SPSP decoding above them
+// differs (SSC un-swaps, NVMe is native).
 //
 
-// MockSendData — IF-SEND (SECURITY PROTOCOL OUT). Mirrors MockTPer.Send: only
-// proto 0x01 on the session ComID is accepted; malformed framing is a device
-// error and leaves all state (including the pending response) untouched.
+// SecuritySendCommon — IF-SEND. Mirrors MockTPer.Send: only proto 0x01 on the
+// session ComID is accepted; malformed framing is a device error and leaves all
+// state (including the pending response) untouched.
 STATIC
 EFI_STATUS
-EFIAPI
-MockSendData (
-  IN EFI_STORAGE_SECURITY_COMMAND_PROTOCOL  *This,
-  IN UINT32                                 MediaId,
-  IN UINT64                                 Timeout,
-  IN UINT8                                  SecurityProtocolId,
-  IN UINT16                                 SecurityProtocolSpecificData,
-  IN UINTN                                  PayloadBufferSize,
-  IN VOID                                   *PayloadBuffer
+SecuritySendCommon (
+  IN UINT8       SecurityProtocolId,
+  IN UINT16      ComId,
+  IN CONST VOID  *Buf,
+  IN UINTN       Len
   )
 {
   CONST UINT8  *Payload;
   UINTN        PayloadLen;
 
-  if (SecurityProtocolId != MOCK_PROTO_SECURITY ||
-      MOCK_COMID (SecurityProtocolSpecificData) != MOCK_COMID_SESSION)
-  {
+  if (SecurityProtocolId != MOCK_PROTO_SECURITY || ComId != MOCK_COMID_SESSION) {
     return EFI_DEVICE_ERROR;
   }
 
@@ -704,9 +779,7 @@ MockSendData (
     return EFI_DEVICE_ERROR;
   }
 
-  if (PayloadBuffer == NULL ||
-      !DecodeFrame (PayloadBuffer, PayloadBufferSize, &Payload, &PayloadLen))
-  {
+  if (Buf == NULL || !DecodeFrame (Buf, Len, &Payload, &PayloadLen)) {
     return EFI_DEVICE_ERROR;
   }
 
@@ -714,35 +787,27 @@ MockSendData (
   return EFI_SUCCESS;
 }
 
-// MockReceiveData — IF-RECV (SECURITY PROTOCOL IN). Mirrors MockTPer.Recv:
-// the discovery ComID returns the golden Discovery0 image (flags patched from
-// live state); the session ComID returns the pending response, truncated to
-// the request size like a real IF-RECV.
+// SecurityRecvCommon — IF-RECV. Mirrors MockTPer.Recv: the discovery ComID
+// returns the golden Discovery0 image (flags patched from live state); the
+// session ComID returns the pending response, truncated to the request size
+// like a real IF-RECV. *N is the transferred byte count.
 STATIC
 EFI_STATUS
-EFIAPI
-MockReceiveData (
-  IN  EFI_STORAGE_SECURITY_COMMAND_PROTOCOL  *This,
-  IN  UINT32                                 MediaId,
-  IN  UINT64                                 Timeout,
-  IN  UINT8                                  SecurityProtocolId,
-  IN  UINT16                                 SecurityProtocolSpecificData,
-  IN  UINTN                                  PayloadBufferSize,
-  OUT VOID                                   *PayloadBuffer,
-  OUT UINTN                                  *PayloadTransferSize
+SecurityRecvCommon (
+  IN  UINT8   SecurityProtocolId,
+  IN  UINT16  ComId,
+  OUT VOID    *Buf,
+  IN  UINTN   Cap,
+  OUT UINTN   *N
   )
 {
   UINT8  Discovery[sizeof (mDiscovery0Locked)];
-  UINTN  N;
 
-  if (PayloadTransferSize == NULL || (PayloadBuffer == NULL && PayloadBufferSize != 0)) {
-    return EFI_INVALID_PARAMETER;
-  }
   if (SecurityProtocolId != MOCK_PROTO_SECURITY) {
     return EFI_DEVICE_ERROR;
   }
 
-  if (MOCK_COMID (SecurityProtocolSpecificData) == MOCK_COMID_DISCOVERY) {
+  if (ComId == MOCK_COMID_DISCOVERY) {
     // Golden fixture bytes (test/fixtures/opal/discovery0-locked.bin), with
     // the Locking-feature flags byte patched from live state. In the initial
     // locked state the patch is the identity, so the response is byte-exact.
@@ -757,25 +822,212 @@ MockReceiveData (
     } else {
       Discovery[DISCOVERY_LOCKING_FLAGS_OFF] &= ~LOCKING_FLAG_MBR_DONE;
     }
-    N = MIN (sizeof (Discovery), PayloadBufferSize);
-    CopyMem (PayloadBuffer, Discovery, N);
-    *PayloadTransferSize = N;
+    *N = MIN (sizeof (Discovery), Cap);
+    CopyMem (Buf, Discovery, *N);
     return EFI_SUCCESS;
   }
 
-  if (MOCK_COMID (SecurityProtocolSpecificData) != MOCK_COMID_SESSION) {
+  if (ComId != MOCK_COMID_SESSION) {
     return EFI_DEVICE_ERROR;
   }
 
-  N = MIN (mRespLen, PayloadBufferSize);
-  CopyMem (PayloadBuffer, mResp, N);
-  *PayloadTransferSize = N;
+  *N = MIN (mRespLen, Cap);
+  CopyMem (Buf, mResp, *N);
   return EFI_SUCCESS;
+}
+
+//
+// EFI_STORAGE_SECURITY_COMMAND_PROTOCOL implementation. SPSP arrives pre-swapped
+// by the transport (see MOCK_COMID); un-swap to recover the logical ComID.
+//
+
+STATIC
+EFI_STATUS
+EFIAPI
+MockSendData (
+  IN EFI_STORAGE_SECURITY_COMMAND_PROTOCOL  *This,
+  IN UINT32                                 MediaId,
+  IN UINT64                                 Timeout,
+  IN UINT8                                  SecurityProtocolId,
+  IN UINT16                                 SecurityProtocolSpecificData,
+  IN UINTN                                  PayloadBufferSize,
+  IN VOID                                   *PayloadBuffer
+  )
+{
+  return SecuritySendCommon (
+           SecurityProtocolId,
+           MOCK_COMID (SecurityProtocolSpecificData),
+           PayloadBuffer,
+           PayloadBufferSize
+           );
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+MockReceiveData (
+  IN  EFI_STORAGE_SECURITY_COMMAND_PROTOCOL  *This,
+  IN  UINT32                                 MediaId,
+  IN  UINT64                                 Timeout,
+  IN  UINT8                                  SecurityProtocolId,
+  IN  UINT16                                 SecurityProtocolSpecificData,
+  IN  UINTN                                  PayloadBufferSize,
+  OUT VOID                                   *PayloadBuffer,
+  OUT UINTN                                  *PayloadTransferSize
+  )
+{
+  if (PayloadTransferSize == NULL || (PayloadBuffer == NULL && PayloadBufferSize != 0)) {
+    return EFI_INVALID_PARAMETER;
+  }
+  return SecurityRecvCommon (
+           SecurityProtocolId,
+           MOCK_COMID (SecurityProtocolSpecificData),
+           PayloadBuffer,
+           PayloadBufferSize,
+           PayloadTransferSize
+           );
 }
 
 STATIC EFI_STORAGE_SECURITY_COMMAND_PROTOCOL  mMockOpalSsc = {
   MockReceiveData,
   MockSendData
+};
+
+//
+// EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL implementation (#110) — the same TPer over
+// the NVMe carrier. Only PassThru is functional (the only member the PBA's
+// transport calls — internal/transport/nvme_tamago.go / go-boot nvmepassthru.go);
+// the namespace/device-path members are honest EFI_UNSUPPORTED stubs.
+//
+
+// MockNvmePassThru dispatches an admin command packet:
+//   Identify Controller (0x06, CNS=1) → zeroed 4096-byte identify data with the
+//     scripted serial at bytes 4..23 (the sedutil-pbkdf2 salt path);
+//   Security Send (0x81) / Security Receive (0x82) → the shared TPer, with
+//     SECP in Cdw10[31:24] and SPSP (the ComID, NATIVE order — no swap, by the
+//     carrier contract) in Cdw10[23:8], transfer length in Cdw11.
+// Anything else fails closed (EFI_UNSUPPORTED / EFI_INVALID_PARAMETER).
+STATIC
+EFI_STATUS
+EFIAPI
+MockNvmePassThru (
+  IN     EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL        *This,
+  IN     UINT32                                    NamespaceId,
+  IN OUT EFI_NVM_EXPRESS_PASS_THRU_COMMAND_PACKET  *Packet,
+  IN     EFI_EVENT                                 Event OPTIONAL
+  )
+{
+  UINT8       Secp;
+  UINT16      Spsp;
+  UINTN       N;
+  EFI_STATUS  Status;
+
+  if (Packet == NULL || Packet->NvmeCmd == NULL || NamespaceId != 0) {
+    // Security/Identify-Controller are controller-level admin commands (NSID 0).
+    return EFI_INVALID_PARAMETER;
+  }
+  if (Packet->NvmeCompletion != NULL) {
+    ZeroMem (Packet->NvmeCompletion, sizeof (EFI_NVM_EXPRESS_COMPLETION));
+  }
+
+  Secp = (UINT8)(Packet->NvmeCmd->Cdw10 >> 24);
+  Spsp = (UINT16)(Packet->NvmeCmd->Cdw10 >> 8);
+
+  switch (Packet->NvmeCmd->Cdw0.Opcode) {
+    case MOCK_NVME_IDENTIFY:
+      if ((Packet->NvmeCmd->Cdw10 & 0xFF) != MOCK_NVME_CNS_CTRL ||
+          Packet->TransferBuffer == NULL ||
+          Packet->TransferLength < MOCK_NVME_SERIAL_OFF + MOCK_NVME_SERIAL_LEN)
+      {
+        return EFI_INVALID_PARAMETER;
+      }
+      ZeroMem (Packet->TransferBuffer, Packet->TransferLength);
+      CopyMem (
+        (UINT8 *)Packet->TransferBuffer + MOCK_NVME_SERIAL_OFF,
+        mNvmeSerial,
+        MOCK_NVME_SERIAL_LEN
+        );
+      SerialStr ("MOCKOPAL: nvme identify\r\n");
+      return EFI_SUCCESS;
+
+    case MOCK_NVME_SECURITY_SEND:
+      return SecuritySendCommon (
+               Secp,
+               Spsp,                       // native TCG order — no swap
+               Packet->TransferBuffer,
+               Packet->TransferLength
+               );
+
+    case MOCK_NVME_SECURITY_RECV:
+      if (Packet->TransferBuffer == NULL && Packet->TransferLength != 0) {
+        return EFI_INVALID_PARAMETER;
+      }
+      // Zero-fill first: the NVMe carrier has no transfer-size feedback (the
+      // caller sees the whole buffer), so the tail must be deterministic.
+      ZeroMem (Packet->TransferBuffer, Packet->TransferLength);
+      Status = SecurityRecvCommon (
+                 Secp,
+                 Spsp,                     // native TCG order — no swap
+                 Packet->TransferBuffer,
+                 Packet->TransferLength,
+                 &N
+                 );
+      return Status;
+
+    default:
+      return EFI_UNSUPPORTED;
+  }
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+MockNvmeGetNextNamespace (
+  IN     EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL  *This,
+  IN OUT UINT32                              *NamespaceId
+  )
+{
+  return EFI_UNSUPPORTED;
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+MockNvmeBuildDevicePath (
+  IN     EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL  *This,
+  IN     UINT32                              NamespaceId,
+  IN OUT EFI_DEVICE_PATH_PROTOCOL            **DevicePath
+  )
+{
+  return EFI_UNSUPPORTED;
+}
+
+STATIC
+EFI_STATUS
+EFIAPI
+MockNvmeGetNamespace (
+  IN  EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL  *This,
+  IN  EFI_DEVICE_PATH_PROTOCOL            *DevicePath,
+  OUT UINT32                              *NamespaceId
+  )
+{
+  return EFI_UNSUPPORTED;
+}
+
+STATIC EFI_NVM_EXPRESS_PASS_THRU_MODE  mMockNvmeMode = {
+  EFI_NVM_EXPRESS_PASS_THRU_ATTRIBUTES_PHYSICAL |
+  EFI_NVM_EXPRESS_PASS_THRU_ATTRIBUTES_LOGICAL |
+  EFI_NVM_EXPRESS_PASS_THRU_ATTRIBUTES_CMD_SET_NVM,
+  0,                                        // IoAlign: no alignment restriction
+  0x00010400                                // NVMe 1.4
+};
+
+STATIC EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL  mMockNvme = {
+  &mMockNvmeMode,
+  MockNvmePassThru,
+  MockNvmeGetNextNamespace,
+  MockNvmeBuildDevicePath,
+  MockNvmeGetNamespace
 };
 
 //
@@ -822,6 +1074,9 @@ ReadFaultVariable (
   if (!EFI_ERROR (Status) && FaultValueIs (Buf, Size, "auth-fail")) {
     mFault = MockFaultAuthFail;
     SerialStr ("MOCKOPAL: fault auth-fail active\r\n");
+  } else if (!EFI_ERROR (Status) && FaultValueIs (Buf, Size, "auth-lockout")) {
+    mFault = MockFaultAuthLockout;
+    SerialStr ("MOCKOPAL: fault auth-lockout active\r\n");
   } else if (!EFI_ERROR (Status) && FaultValueIs (Buf, Size, "fail-mbrdone")) {
     mFault = MockFaultMbrDoneFail;
     SerialStr ("MOCKOPAL: fault fail-mbrdone active\r\n");
@@ -836,12 +1091,13 @@ ReadFaultVariable (
 
 /**
   Driver entry: emit the dispatch marker, select the fault mode, and install
-  the Storage Security Command protocol on a fresh handle.
+  the Storage Security Command and NVMe pass-thru protocols — the mock SED's two
+  carriers, sharing one TPer state — on a fresh handle.
 
   @param[in] ImageHandle  The driver image handle.
   @param[in] SystemTable  The EFI system table.
 
-  @retval EFI_SUCCESS  The protocol was installed.
+  @retval EFI_SUCCESS  The protocols were installed.
   @return              Error from InstallMultipleProtocolInterfaces.
 **/
 EFI_STATUS
@@ -862,6 +1118,8 @@ MockOpalDxeEntryPoint (
                   &Handle,
                   &gEfiStorageSecurityCommandProtocolGuid,
                   &mMockOpalSsc,
+                  &gEfiNvmExpressPassThruProtocolGuid,
+                  &mMockNvme,
                   NULL
                   );
   if (EFI_ERROR (Status)) {
@@ -870,5 +1128,6 @@ MockOpalDxeEntryPoint (
   }
 
   SerialStr ("MOCKOPAL: protocol installed\r\n");
+  SerialStr ("MOCKOPAL: nvme passthru installed\r\n");
   return EFI_SUCCESS;
 }

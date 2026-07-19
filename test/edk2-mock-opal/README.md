@@ -1,11 +1,13 @@
 # MockOpalDxe — EDK2 mock Opal driver (test tooling)
 
 Per [test-tooling-plan §3.3](../../docs/test-tooling-plan.md) (epic #22). A UEFI
-DXE driver that installs `EFI_STORAGE_SECURITY_COMMAND_PROTOCOL` on a fresh
-handle and emulates the canonical locked Opal 2.0 SED from the
-[shared fake-Opal spec](../fixtures/opal/README.md), so the PBA's *real* UEFI
-transport path (locate protocol → IF-SEND/IF-RECV → unlock) can be exercised in
-QEMU/OVMF without hardware.
+DXE driver that installs `EFI_STORAGE_SECURITY_COMMAND_PROTOCOL` **and**
+`EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL` (#110) on a fresh handle and emulates the
+canonical locked Opal 2.0 SED from the
+[shared fake-Opal spec](../fixtures/opal/README.md), so both of the PBA's *real*
+transport paths (Storage Security IF-SEND/IF-RECV, and NVMe Security
+Send/Receive + Identify Controller) can be exercised in QEMU/OVMF without
+hardware. The two protocol surfaces share one TPer state.
 
 **Test tooling only.** Product code must never import or depend on it.
 
@@ -19,9 +21,15 @@ framing (`packet.go`), status codes, and the scripted Admin1 unlock sequence:
    `test/fixtures/opal/discovery0-locked.bin` bytes (embedded as the generated
    `Discovery0Locked.h`; the Locking-feature flags byte is patched from live
    state, which is the identity while the device is still locked).
-2. `StartSession` on base ComID `0x07FE`: correct Admin1 PIN (`correct horse`)
-   → `SyncSession [HSN, TSN=0x1000]` success; wrong PIN → status `0x12`, no
-   session, device stays locked.
+2. `StartSession` on base ComID `0x07FE`: a correct Admin1 credential
+   → `SyncSession [HSN, TSN=0x1000]` success; wrong credential → status `0x01`
+   (`NOT_AUTHORIZED`, the real-drive wrong-PIN shape — the status the #112 auto
+   iteration mode advances on), no session, device stays locked. Two credentials
+   authenticate, modelling one drive reachable over two carriers: the raw PIN
+   `correct horse` (no-hash provisioning, the Storage Security matrix) and its
+   sedutil-pbkdf2 derivation at **75000** iterations over the scripted serial
+   (hash-provisioned shape, the NVMe matrix — see `mAdmin1DerivedKey` in
+   `MockOpalDxe.c`, drift-guarded by `TestMockDerivedKeySync`).
 3. `Set Locking_GlobalRange { ReadLocked=0, WriteLocked=0 }` → unlocked.
 4. `Set MBRControl { Done=1 }` → shadow MBR done.
 5. `EndOfSession` (`0xFA`) → `0xFA` echo, session cleared.
@@ -48,6 +56,27 @@ stream remains readable via IF-RECV. Negative tests must therefore assert via
 
 Regenerate the embedded discovery array after a fixture change with
 `./gen-discovery-header.sh` (`build.sh` runs `--check` as a drift guard).
+
+## NVMe pass-thru surface (#110)
+
+The same handle carries `EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL` — the carrier of
+the PBA's NVMe-passthru transport (`internal/transport/nvme_tamago.go`). Only
+`PassThru` is functional (the only member the transport calls); it dispatches
+admin command packets:
+
+- **Identify Controller** (`0x06`, CNS=1) → zeroed 4096-byte identify data with
+  the scripted 20-byte serial `TPBA-MOCK-0001      ` at bytes 4..23 — the
+  sedutil-pbkdf2 PBKDF2 salt.
+- **Security Send** (`0x81`) / **Security Receive** (`0x82`) → the shared TPer,
+  SECP in Cdw10[31:24], SPSP (ComID) in Cdw10[23:8]. **ComID order differs by
+  design:** this path takes the ComID in native TCG order (no swap), the
+  Storage Security path un-swaps — mirroring the marshalling difference between
+  the two real firmware carriers.
+
+Because QEMU exposes no `EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL` unless a real
+`-device nvme` is attached, this driver is the sole pass-thru instance in the
+NVMe matrix — and omitting it makes "zero pass-thru handles → hard fail" a true
+negative (see `test/qemu/nvme-opal-matrix.sh`).
 
 ## Building
 
@@ -95,10 +124,14 @@ image must be signed with the test `db` key like the other test images.
 |---|---|
 | `MOCKOPAL: dispatched` | driver entry reached |
 | `MOCKOPAL: protocol installed` | SSC protocol installed on a handle |
+| `MOCKOPAL: nvme passthru installed` | NVMe pass-thru protocol installed (same handle) |
 | `MOCKOPAL: install failed` | protocol install failed (driver exits) |
 | `MOCKOPAL: fault <mode> active` | fault mode armed from the variable |
 | `MOCKOPAL: fault unknown failing closed as auth-fail` | unreadable/unknown variable value |
+| `MOCKOPAL: startsession N` | Nth StartSession attempt this boot (capped at 9) — FORBID `startsession 2` asserts the auto loop stopped after one try |
 | `MOCKOPAL: auth ok` / `MOCKOPAL: auth fail` | StartSession outcome |
+| `MOCKOPAL: auth lockout` | `auth-lockout` fault hit (status `0x12`) |
+| `MOCKOPAL: nvme identify` | Identify Controller served (serial/salt read) |
 | `MOCKOPAL: unlocked` | global range read/write locks cleared |
 | `MOCKOPAL: mbr-done set` | MBRControl Done set |
 | `MOCKOPAL: mbr-refused fault` | `fail-mbrdone` fault hit |
@@ -113,7 +146,8 @@ The driver reads the UEFI variable **`MockOpalFault`**, vendor GUID
 | Value | Behaviour | Maps to PBA negative test |
 |---|---|---|
 | *(absent)* | normal scripted unlock | happy path |
-| `auth-fail` | every `StartSession` → status `0x12`, stays locked | wrong credential / auth failure |
+| `auth-fail` | every `StartSession` → status `0x01` (`NOT_AUTHORIZED`, wrong-PIN shape) | wrong credential / auth failure |
+| `auth-lockout` | every `StartSession` → status `0x12` (`AUTHORITY_LOCKED_OUT`) | try-limit exhausted — the #112 auto mode must stop immediately, never a second attempt |
 | `fail-mbrdone` | `Set MBRControl` → `NOT_AUTHORIZED` method status | MBRDone refused (method-status error path) |
 | `fail-after-unlock` | `Set GlobalRange` succeeds (device unlocks), every later IF-SEND → `EFI_DEVICE_ERROR` | partial unlock / transport drop (transport error path) |
 

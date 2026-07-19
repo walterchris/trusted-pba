@@ -33,8 +33,11 @@ The byte-faithful exchange the simulator and driver must both implement:
 1. **Level 0 Discovery** — IF-RECV(proto `0x01`, ComID `0x0001`) → `discovery0-locked.bin`.
 2. **StartSession** — IF-SEND(proto `0x01`, base ComID) of
    `Call SMUID StartSession [ HSN, LockingSP, TRUE, Name0=PIN, Name3=Admin1 ]` →
-   response `SyncSession [ HSN, TSN ]` with success status (wrong PIN → non-success
-   status, no session).
+   response `SyncSession [ HSN, TSN ]` with success status. Wrong PIN →
+   `NOT_AUTHORIZED` (`0x01`), no session — the real-drive wrong-credential shape
+   (observed on hardware, and the status the #112 auto iteration mode advances
+   on); `AUTHORITY_LOCKED_OUT` (`0x12`) is reserved for the try-limit-exhausted
+   fault shape.
 3. **Set global range** — `Set Locking_GlobalRange { ReadLocked=0, WriteLocked=0 }`
    → success; device transitions to unlocked.
 4. **Set MBRControl** — `Set MBRControl { Done=1 }` (only if MBR enabled and not

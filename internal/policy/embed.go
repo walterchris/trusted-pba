@@ -1,4 +1,4 @@
-//go:build !policytest && !pbatest && !sedtest && !winhandoff && !consoletest && !keyfiletest
+//go:build !policytest && !pbatest && !sedtest && !winhandoff && !consoletest && !keyfiletest && !sednvmetest
 
 package policy
 

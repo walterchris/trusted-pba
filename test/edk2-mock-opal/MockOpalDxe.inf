@@ -1,6 +1,7 @@
 ## @file
 #  MockOpalDxe — test-tooling DXE driver emulating the canonical locked Opal
-#  SED via EFI_STORAGE_SECURITY_COMMAND_PROTOCOL (test-tooling-plan §3.3).
+#  SED via EFI_STORAGE_SECURITY_COMMAND_PROTOCOL (test-tooling-plan §3.3) and,
+#  sharing the same TPer state, via EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL (#110).
 #  NOT product code.
 ##
 
@@ -29,3 +30,4 @@
 
 [Protocols]
   gEfiStorageSecurityCommandProtocolGuid  ## PRODUCES
+  gEfiNvmExpressPassThruProtocolGuid      ## PRODUCES
