@@ -197,6 +197,15 @@ tasks:
         vars: { OUT: '{{.APP}}-sednvmetest', EXTRA_TAGS: ",sednvmetest,hwdebug" }
       - test/qemu/nvme-opal-matrix.sh {{.BIN}}/{{.APP}}-sednvmetest.efi {{.BIN}}/testapp.efi
 
+  linux-boot-matrix:
+    desc: 'Linux-boot matrix — mock-SED unlock → chainload a real Linux UKI (distro kernel + Go-init initramfs) to userspace: POS, NEG (auth-fail → OS never boots), POS under enforcing Secure Boot. Needs EDK2 build deps, host go, ukify + sd-boot stub, sbsign, virt-firmware.'
+    cmds:
+      - test/edk2-mock-opal/build.sh
+      - task: _efi
+        vars: { OUT: '{{.APP}}-sedtest', EXTRA_TAGS: ",sedtest" }
+      - test/qemu/build-linux-uki.sh {{.BIN}}/linux-uki.efi
+      - test/qemu/linux-boot-matrix.sh {{.BIN}}/{{.APP}}-sedtest.efi {{.BIN}}/linux-uki.efi
+
   console-matrix:
     desc: 'Console credential-source matrix (ADR-0011 A2, #99) — automated QMP send-key injection: POS (correct horse → unlock ok) + NEG (wrong pass → fail closed). Headless/CI-safe; no human keystrokes. Needs EDK2 build deps + virt-firmware.'
     cmds:
