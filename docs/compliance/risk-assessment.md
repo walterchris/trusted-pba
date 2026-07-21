@@ -62,7 +62,11 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
   (firmware-validation path — the firmware's own Secure Boot engine rejects a
   **db-trusted** PBA image because its Authenticode hash is in **dbx**, proving
   **dbx > db** / revocation overrides trust; non-vacuous vs scenario B and a
-  wrong-hash control — #18).
+  wrong-hash control — #18); `linux-boot-matrix` POS-SB (accept-side
+  complement: a genuinely db-signed **real Linux UKI** boots to userspace under
+  *enforcing* Secure Boot after the SED unlock — unsigned/revoked rejection
+  coverage stays with `secureboot-matrix`/`pba-matrix`, confirmed non-vacuous
+  there).
 - **Evidence:** ADR-0007; `internal/imageverify/verify.go`.
 
 ### R-002 — PBA unlocks SED before authentication succeeds
@@ -84,6 +88,19 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
   assertions on the chainload markers, **mutation-proven** (a fail-open PBA
   mutant fails the matrix; harness FORBID liveness re-proven by
   `harness-selftest.sh` on every run).
+  **Real-OS negative (linux-boot matrix, 2026-07-21, #118):** the fail-closed
+  gate now also holds with a **real operating system** behind it — the
+  linux-boot matrix's NEG scenario stages a real Linux UKI (distro kernel +
+  Go-init initramfs) at the same target path and proves a failed unlock
+  **never boots an OS** ("locked drive never boots an OS"). Its enforcing
+  FORBIDs are the PBA's *early* chainload-side markers
+  (`TRUSTED-PBA: starting` / `TRUSTED-PBA: ESP opened`, emitted within
+  milliseconds of a fail-open unlock — inside the harness's FORBID grace
+  window; the slow `TEST-LINUX: userspace ok` marker arrives minutes later
+  under TCG, outside the window, and is retained as defense-in-depth only —
+  a security-review finding fixed before merge, see the 2026-07-21 change-log
+  row), **mutation-proven** (a deliberately fail-open PBA mutant is caught on
+  `TRUSTED-PBA: ESP opened`).
 - **Credential source (ADR-0011, #98/#99/#100):** the secret is now **policy-selected**
   via `sed_credential` rather than a single compiled-in `sed_pin`. The `console`
   source (#99, A2) resolves an interactive secret from UEFI `SimpleTextInput` with
@@ -146,7 +163,8 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
   `cmd/pba` `TestUnlockSED*`; `internal/policy` `TestParseSEDUnlock`;
   `mock-opal-matrix` (6 scenarios) + `harness-selftest.sh` (CI job
   `mock-opal-integration`); `nvme-opal-matrix` (POS auto-advance + NEG
-  auth-lockout/no-driver, CI job `qemu-nvme-matrix`, #110).
+  auth-lockout/no-driver, CI job `qemu-nvme-matrix`, #110); `linux-boot-matrix`
+  (POS / NEG auth-fail / POS-SB — real Linux UKI, CI job `qemu-linux-matrix`).
   **Evidence:** ADR-0004, ADR-0009;
   `evidence/security-review-records/2026-06-10-mock-opal-integration-matrix-22.md`.
   **Owner:** Security Owner.
@@ -240,9 +258,16 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 ### R-007 — Windows Boot Manager chainload fails after unlock
 - **Threat/path:** handoff to the OS loader fails post-unlock → unbootable system.
 - **Mitigations:** `firmware`-mode handoff lets firmware own Windows validation
-  (ADR-0006); QEMU chainload smokes assert markers. Real Windows boot is a manual
-  step (proprietary `bootmgfw`; see threat-model §9 gap).
-- **Residual:** Medium (virtual only). **Tests:** `run`; `pba-matrix`. **Owner:** Product + Security.
+  (ADR-0006); QEMU chainload smokes assert markers. **Real-kernel positive
+  (linux-boot matrix, 2026-07-21, #118):** "chainload fails after unlock" now
+  has a real-OS virtual regression guard — after the mock-SED unlock the PBA
+  chainloads a real Linux UKI that reaches userspace (POS, and POS-SB under
+  enforcing Secure Boot with a db-signed UKI), the first end-to-end of the
+  unlock→boot-an-OS claim. Real Windows boot remains a manual step
+  (proprietary `bootmgfw`; see threat-model §9 gap).
+- **Residual:** Medium (virtual only; Windows handoff unproven on hardware).
+  **Tests:** `run`; `pba-matrix`; `linux-boot-matrix` (CI job
+  `qemu-linux-matrix`). **Owner:** Product + Security.
 
 ### R-008 — MBRDone does not take effect until reboot
 - **Threat/path:** Shadow-MBR remains visible after unlock, OS reads wrong data.
@@ -379,4 +404,5 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
 | 2026-07-05 | **R-001/R-004 — release policy gate broadened (#90).** The release-only gate (`policy.CheckReleaseReady`, run by `release.yml`) previously blocked only `sed_unlock:"none"`; a release built from the dev default (`require_secure_boot:false` + firmware-mode `EFI/TEST/…` target) would have booted any ESP image with Secure Boot off (firmware mode does no PBA-side validation). The gate now also requires enforcing Secure Boot (an *absent* `require_secure_boot` is treated as unsafe — the opposite default from `sed_unlock`) and rejects a test-fixture target (normalized against `\`/`.`/`//`/leading-`/` variants). Reduces the R-001/R-004 release-time residual; no rating change (residual was already Low; boot path and dev-build behavior unchanged, PR CI unaffected — the gate runs only at release). Table-tested (`TestCheckReleaseReady`); independent security review APPROVE. Review record: `evidence/security-review-records/2026-07-05-release-gate-hardening-90.md`. |
 | 2026-07-07 | **Configurable `sedutil-pbkdf2` iterations + `auto` mode (#112, within ADR-0011 §3).** R-002/R-003 derive bullet extended: the `sedutil-pbkdf2` iteration count + key length are now **policy-configurable** via `sed_credential.derive_params` (`iterations: <int>\|"auto"`, `key_len`). **Absent → defaults 500000/32, byte-for-byte identical to the pre-#112 behavior**; SHA-512 unchanged; validation fail-closed (stray `derive_params` on non-sedutil derives, explicit iterations outside 1..100_000_000 incl. explicit-0, key_len outside 1..64). `auto` tries a fixed best-first list `[500000, 75000]`, advancing only on Opal `NOT_AUTHORIZED` (`opal.ErrNotAuthorized`) and **stopping closed on `AUTHORITY_LOCKED_OUT`** (`opal.ErrAuthLockedOut`) / any other error / exhaustion — **try-limit-safe** (best-first burns no extra Admin1 try in the common case); F-2 preserved (seed + every derived key zeroized on all paths). Motivated by the A4b HW iteration mismatch (lab sedutil 1.20.0 at 75000 vs hardcoded 500000). The **unlock-before-auth invariant is structural and iteration-independent**; two independent reviews (go-reviewer + security-review-agent) APPROVE (go-reviewer nits applied). Within the already-Accepted ADR-0011 §3 (no new ADR gate). **No rating change** (R-002 Medium, R-003 Low). Residuals: operator must know the provisioning iteration count (PBA cannot read it back; `auto` discovers it — customer fork / v1.15 = 500000, upstream older e.g. 1.20.0 = 75000); real-drive `NOT_AUTHORIZED`-vs-lockout timing is an R-010/Phase-8 item (MockTPer conflates them). Review record: `evidence/security-review-records/2026-07-07-configurable-sedutil-iterations-112.md`. |
 | 2026-07-19 | **QEMU NVMe-passthru Opal matrix + mock wrong-credential fidelity fix (#110, branch `feat/nvme-opal-matrix-110`; test tooling + mock-fidelity only, NO product code change).** **R-010:** MockOpalDxe now also produces `EFI_NVM_EXPRESS_PASS_THRU_PROTOCOL` on the same handle (Identify Controller with the scripted 20-byte serial = the sedutil-pbkdf2 salt; Security Send/Receive `0x81`/`0x82` into the shared TPer, ComID in native order — the product NVMe carrier's contract), and the new `nvme-opal-matrix` (CI job `qemu-nvme-matrix`, `-tags sednvmetest,hwdebug` PBA, embedded test policy: policy-pin + `sedutil-pbkdf2` + `iterations:"auto"` + `on_error:halt`) exercises the **real product NVMe-passthru carrier code** deterministically in CI — previously provable only on hardware. **Mock-fidelity fix (R-010-relevant):** both mocks (host `MockTPer` + EDK2 driver) returned `AUTHORITY_LOCKED_OUT` (`0x12`) for a wrong credential; real drives return `NOT_AUTHORIZED` (`0x01`, observed on lab HW) — a genuine mock/real divergence under which a MockTPer-backed `auto`-mode test would have wrongly stopped instead of advancing. Both mocks + the shared spec now use `0x01` for wrong-credential; `0x12` is an explicit `auth-lockout` fault (supersedes the #112 "MockTPer conflates them" residual note; real-drive *timing* stays a Phase-8 item). **R-002:** the #112 `auto` try-limit safety is now proven **end-to-end in QEMU** — POS advance 500000→75000 → unlock → MBRDone → chainload over `EFI_NVM_EXPRESS_PASS_THRU`; NEG `auth-lockout` stops after attempt 1 (FORBID `startsession 2` + boot markers); NEG no-driver → hard fail-closed, no boot. All 3 scenarios PASS locally (2026-07-19); regressions `mock-opal-matrix` 6/6 and `keyfile-matrix` 2/2 PASS with the shared driver changes; the mock's 75000-iteration derived credential is drift-guarded by `TestMockDerivedKeySync` against the KAT-verified `SedutilPBKDF2`. **No rating change** (R-010 Medium, R-002 Medium — coverage strengthened, hardware validation still pending). **No new ADR** — test tooling within ADR-0005's virtual-first strategy and the already-Accepted ADR-0011 §3 semantics; no product behavior change. CRA matrix: **no impact** (ER-10 status unchanged; the matrix adds to its existing virtual-testing evidence). Two independent reviews (go-reviewer + security-review-agent) APPROVE, no changes. Review record: `evidence/security-review-records/2026-07-19-nvme-opal-matrix-110.md`; test evidence: `evidence/test-reports/2026-07-19-nvme-opal-matrix-110.md`. |
+| 2026-07-21 | **Linux-boot matrix — first real-OS end-to-end of the unlock→boot claim (branch `feat/linux-boot-matrix`, #118; test tooling only).** A new QEMU matrix chainloads a **real Linux UKI** (distro kernel + static Go-init initramfs, assembled by `ukify` — embedded cmdline/initramfs because the PBA passes no LoadOptions) from the **unchanged** `-tags sedtest` PBA after the MockOpalDxe unlock: POS (kernel → `Run /init` → userspace marker → power-off), NEG auth-fail (locked drive **never boots an OS**), POS-SB (enforcing Secure Boot, throwaway per-run keys, db-signed driver+PBA+UKI). **R-002** gains the real-OS negative; **R-001** gains the POS-SB accept-side complement; **R-007** gains the real-kernel positive. **Security-review finding (initially BLOCK, empirically demonstrated):** the NEG's only fail-open detector was the userspace marker, which under TCG arrives minutes after the last REQUIRE — outside `expect-serial.py`'s 8s FORBID grace window — so a fail-open PBA would have **false-PASSed** (reproduced via the harness's `EXPECT_STUB` seam). **Fixed per review:** the NEG now FORBIDs the PBA's *early* chainload-side markers (`TRUSTED-PBA: starting` / `TRUSTED-PBA: ESP opened`, milliseconds — inside the window); the userspace marker stays as defense-in-depth; the harness-selftest comment now states the grace-window precondition (threat-model §9 row qualified accordingly). **Mutation-proven (2026-07-21):** a deliberately fail-open PBA mutant (never committed) was caught by the hardened NEG — `FAIL: forbidden marker observed: TRUSTED-PBA: ESP opened`, exit 1; product code reverted byte-identical (verified clean). All 3 scenarios PASS locally (2026-07-21); CI job `qemu-linux-matrix` added (green run pending on the PR). go-reviewer: two lint nits applied, `golangci-lint` 0 issues. **No product code changed** (verified by the independent security review) ⇒ **no ADR** (baseline §23) and **no rating change** (R-001 Low, R-002 Medium, R-007 Medium). Evidence: `evidence/test-reports/2026-07-21-linux-boot-matrix.md`; review record `evidence/security-review-records/2026-07-21-linux-boot-matrix.md`. |
 | 2026-08-16 | **R-009 — GO-2026-5972 / CVE-2026-33818 remediated (toolchain bump go1.26.4 → go1.26.6).** The nightly `vuln-scan` (govulncheck, unchanged code — exactly the disclosure-without-a-commit case the job exists for) flagged a new stdlib vulnerability in `encoding/asn1`: missing recursion limit in `Unmarshal` → **stack exhaustion on deeply-nested ASN.1**, reachable from our code (`truststore.Load` → `x509.ParseCertificate`; the same ASN.1 path parses attacker-supplied PKCS#7 in `imageverify`). This is precisely the class the R-009 recover() backstop cannot catch (stack overflow is not recoverable — the documented F-2 residual in `evidence/security-review-records/2026-07-19-nvme-opal-matrix-110.md`'s predecessor record for #114), so the fix must come from the runtime: bumped the pinned TamaGo toolchain (`tamago-go1.26.6`, new SHA-256 pin), the `go.mod` directive (all host CI jobs key off it), and the tamago library to v1.26.6 (lockstep rule). Verified: `govulncheck ./...` → "affected by 0 vulnerabilities"; full host tests green; QEMU boot smoke green with the go1.26.6-built PBA. Impact of the vuln: pre-boot availability/DoS via a crafted certificate/PKCS#7 (no C/I bypass); found pre-release, no shipped versions ⇒ no CVD/advisory (baseline §15). Toolchain/dependency bump only, no code change ⇒ **no ADR**, **no rating change** (R-009 residual stays Low; the un-catchable stack-exhaustion sub-class is now bounded by the runtime's recursion limit). |

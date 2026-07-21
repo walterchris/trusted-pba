@@ -122,6 +122,29 @@ send/receive implements a fake Opal session; MBRDone disables the Shadow MBR and
 exposes the real ESP. Requires QEMU C internals expertise and likely a maintained
 fork/out-of-tree patch. **Not in MVP.** Gate behind an ADR.
 
+### 3.8 Linux-boot matrix — real-OS chainload (`test/qemu/linux-boot-matrix.sh`, `test/qemu/build-linux-uki.sh`, `test/fixtures/linuxinit/`)
+The first real-OS end-to-end of the product claim — *unlock the SED, then boot an
+operating system*: the unchanged `-tags sedtest` PBA unlocks the mock SED
+(MockOpalDxe, §3.3) and then chainloads a **real Linux UKI** staged at the
+sedtest policy's existing target path. The UKI is a distro kernel plus a
+one-binary initramfs (`test/fixtures/linuxinit` — a static Go PID-1 that prints
+`TEST-LINUX: userspace ok` on serial and powers off), assembled by systemd
+`ukify`. A **UKI, not a bare EFISTUB kernel**, because the PBA's chainloader
+passes no LoadOptions: the kernel gets its cmdline (`console=ttyS0`) and its
+initramfs only if they are embedded in the image itself. Scenarios:
+**POS** (unlock → UKI → kernel → userspace marker; no "chainload returned"
+REQUIRE — a kernel never returns to the firmware, the guest powers itself off);
+**NEG auth-fail** (unlock fails → the OS never boots — FORBIDs the PBA's *early*
+chainload-side markers `TRUSTED-PBA: starting` / `TRUSTED-PBA: ESP opened`,
+which a fail-open PBA emits within milliseconds, comfortably inside the
+harness's FORBID grace window; the slow userspace marker, minutes away under
+TCG, would arrive *after* the window and stays FORBIDden as defense-in-depth
+only — mutation-proven against a deliberately fail-open PBA mutant);
+**POS-SB** (enforcing Secure Boot, throwaway per-run test keys, db-signed
+driver+PBA+UKI → Linux userspace under enforcement; unsigned-UKI rejection stays
+covered by `secureboot-matrix`/`pba-matrix`). Taskfile target
+`linux-boot-matrix`; CI job `qemu-linux-matrix` (packs the runner's own kernel).
+
 ## 4. Test-tooling roadmap (aligned to product phases)
 
 | Tooling deliverable | Aligns with product phase |
@@ -131,6 +154,7 @@ fork/out-of-tree patch. **Not in MVP.** Gate behind an ADR.
 | OVMF + Secure Boot key material (§3.4) | Phase 2 (Secure Boot matrix) |
 | Native Go Opal simulator + shared fixtures (§3.1–3.2) | Phase 4 (Opal native simulator) |
 | EDK2 MockOpalDxe driver (§3.3) | Phase 6 (UEFI mock Opal driver) |
+| Linux-boot matrix — real-OS chainload (§3.8) | After Phase 6 (first real-OS end-to-end of the unlock→boot claim; virtual precursor to the Phase 8 real-OS handoff) |
 | QEMU virtual SED device model (§3.7) | **Later** — after architecture proven |
 
 ## 5. Virtual CI stages (no hardware)
@@ -140,7 +164,8 @@ Runs on every PR, deterministic, hardware-free:
 ```
 lint -> unit tests (Go Opal simulator) -> fuzz smoke -> SAST -> dependency scan
 -> SBOM -> QEMU UEFI smoke -> QEMU Secure Boot matrix -> QEMU mock-Opal integration
--> chainload tests -> negative policy/security tests
+-> QEMU linux-boot matrix (real-OS chainload) -> chainload tests
+-> negative policy/security tests
 ```
 
 Hardware CI (real SED, Shadow MBR, Windows/Linux chainload, recovery, PSID reset)

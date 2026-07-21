@@ -48,7 +48,9 @@ evidence · status · gaps.**
   `internal/opal`, `internal/imageverify`.
 - **Test evidence:** `internal/policy` parse-negative + `FuzzParse`;
   `TestUnlockFailsClosed/*`; `run-negative`, `sb-require-test`, `pba-matrix`,
-  `mock-opal-matrix` (mutation-proven FORBIDs).
+  `mock-opal-matrix` (mutation-proven FORBIDs); `linux-boot-matrix` NEG
+  (a failed unlock never boots a **real OS** — early-chainload-marker FORBIDs,
+  mutation-proven, 2026-07-21).
 - **Doc evidence:** ADR-0002, ADR-0009; threat model §6.1; risk R-001/R-002.
 - **Status:** Implemented (virtual).
 - **Gaps:** release-time assertion that production defaults are not a test/`none`
@@ -65,7 +67,8 @@ evidence · status · gaps.**
 - **Implementation:** `internal/imageverify`, `internal/truststore`, `internal/secureboot`, `cmd/pba` `verifyAndLoad`.
 - **Test evidence:** `TestVerifyAccepts`/`TestVerifyFailsClosed/*`, `FuzzVerify`,
   `TestVerifyAndLoadVerifiedBufferInvariant`; `pba-matrix`, `secureboot-matrix`
-  (unsigned/wrong-key rejected).
+  (unsigned/wrong-key rejected); `linux-boot-matrix` POS-SB (accept side: a
+  db-signed real Linux UKI boots to userspace under enforcing Secure Boot).
 - **Doc evidence:** ADR-0007, ADR-0006; threat model §6.1/TB2; risk R-001/R-012.
 - **Status:** Implemented (virtual).
 - **Gaps:** real Windows Boot Manager handoff is hardware/manual (R-007);
@@ -164,7 +167,8 @@ evidence · status · gaps.**
 - **Design control:** layered test strategy (baseline §17); every PR runs the
   virtual matrices; negative/fail-closed cases mandatory.
 - **Implementation:** unit + `FuzzParse`/`FuzzResponseParse`/`FuzzVerify` +
-  `pba-matrix` + `secureboot-matrix` + `mock-opal-integration` + harness self-test.
+  `pba-matrix` + `secureboot-matrix` + `mock-opal-integration` +
+  `qemu-linux-matrix` (real-OS linux-boot matrix) + harness self-test.
 - **Test evidence:** the CI jobs above (green on every PR); mutation-proofs in the
   security-review records; the nightly `deep-fuzz` job found and drove the fix of a
   real fail-closed defect (R-009 `imageverify.Verify` panic, 2026-07-18 —
