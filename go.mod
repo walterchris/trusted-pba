@@ -1,10 +1,10 @@
 module github.com/walterchris/trusted-pba
 
-go 1.26.4
+go 1.26.6
 
 // UEFI x86_64 board support (CPU/serial/EFI-System-Table bring-up) lives in
 // go-boot's uefi/x64 package; tamago is the bare-metal Go runtime. Keep the
-// tamago library minor in lockstep with the tamago-go toolchain (go1.26.4).
+// tamago library minor in lockstep with the tamago-go toolchain (go1.26.6).
 // Dependencies are resolved/pinned by `task deps` (go get + mod tidy under
 // GOOS=tamago); the require block below is populated on first resolution.
 
@@ -32,7 +32,7 @@ require (
 	github.com/u-root/u-root v0.15.0 // indirect
 	github.com/u-root/uio v0.0.0-20240224005618-d2acac8f3701 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
-	github.com/usbarmory/tamago v1.26.4 // indirect
+	github.com/usbarmory/tamago v1.26.6 // indirect
 	golang.org/x/crypto v0.42.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.29.0 // indirect
