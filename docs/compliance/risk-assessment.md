@@ -205,11 +205,15 @@ Each: threat · attack path · mitigations · residual · tests · evidence.
   copy of the PIN-bearing JSON — accepted because the compiled-in PIN is
   test-only and replaced by real auth before production (ADR-0009); the `console` source
   (#99, ADR-0011) avoids the binary-embedded-secret residual entirely — **no secret at
-  rest**. **Console input-buffer scrub (landed):** the `console` source's read buffer is
-  zeroized on **every** path — success and all failure branches (empty/EOF/read-error/
+  rest**. **Console input-buffer scrub (landed; hardened #124):** the `console` source's read
+  buffer is zeroized on **every** path — success and all failure branches (empty/EOF/read-error/
   retry-cap) — satisfying the #51/#101 obligation for interactive sources (#51 item 1
   closed the library layer, the Phase 6 wiring the policy-holder layer, and #99 the
-  interactive-entry layer).
+  interactive-entry layer). The accumulator is **pre-allocated to the line-length cap**
+  (`newPassphraseBuf`) so `append` never reallocates: the 2026-08-16 full-codebase audit
+  found the prior grow-from-nil accumulator stranded un-scrubbed passphrase-prefix copies
+  the single `clear()` could not reach (the same stranded-secret class as the opal
+  grow-budget reservation); pinned by `TestPassphraseBufNoRealloc` (#124).
 - **Tests:** `TestUnlockZeroizesSecrets`, `TestTransactZeroizesMethodPayload`,
   `TestStartSessionGrowBudget`, `TestBuilderGrowPreventsReallocation`,
   `TestUnlockEmitsNoConsoleOutput`. **Evidence:** ADR-0004; #51 item 1
