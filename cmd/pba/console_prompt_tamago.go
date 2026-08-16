@@ -11,12 +11,6 @@ import (
 	"github.com/walterchris/trusted-pba/internal/credential"
 )
 
-// maxPassphraseLen bounds a single console passphrase entry so a stuck or
-// adversarial input stream cannot grow the buffer unbounded. It is a length cap
-// on the input line, not a retry cap (the credential.console source bounds
-// retries, ADR-0011 §5).
-const maxPassphraseLen = 128
-
 // uefiPrompter reads an interactive passphrase over the UEFI Simple Text Input
 // protocol (via go-boot's console). It is the concrete credential.Prompter the
 // tamago entrypoint supplies in the credential.Env; the console credential source
@@ -46,6 +40,10 @@ func (uefiPrompter) Passphrase(prompt string) (out []byte, err error) {
 		return nil, errors.New("no UEFI console")
 	}
 	_, _ = con.Write([]byte(prompt))
+
+	// Pre-allocate the accumulator so append never reallocates and strands
+	// un-scrubbed passphrase-prefix copies — see newPassphraseBuf (#124, R-003).
+	out = newPassphraseBuf()
 
 	// Zeroize the accumulator on any error path so a partial passphrase never
 	// escapes un-scrubbed (#101 carry-over; ADR-0011 §5). On the success path we
