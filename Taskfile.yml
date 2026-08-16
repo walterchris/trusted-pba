@@ -16,17 +16,17 @@ env:
 
 vars:
   # --- toolchain ---
-  TAMAGO_VERSION: go1.26.4
+  TAMAGO_VERSION: go1.26.6
   # SHA-256 of tamago-{{.TAMAGO_VERSION}}.linux-amd64.tar.gz, verified on download
   # (supply-chain hygiene, baseline §14/§19; #27). Recompute when bumping the pin.
-  TAMAGO_SHA256: 829a4ea1eaf72a2e7bf57f06feca82fb97b8f67d8ad8e6d870c27fcc5e720a43
+  TAMAGO_SHA256: d9a59d85886ef9a755ce7d8ae5a8a4cf60a6b50292cbfafaa058a2ccaf90f00f
   TAMAGO_ROOT:
     sh: echo "${TAMAGO_ROOT:-$HOME/.tamago/{{.TAMAGO_VERSION}}}"
   TAMAGO_BIN:
     sh: echo "${TAMAGO:-{{.TAMAGO_ROOT}}/bin/go}"
   # --- dependency pins (bump deliberately; supply-chain hygiene, baseline §14) ---
   GOBOOT_VERSION: v1.6.2
-  TAMAGO_LIB_VERSION: v1.26.4
+  TAMAGO_LIB_VERSION: v1.26.6
   # --- build ---
   APP: trusted-pba
   BIN: bin
@@ -50,14 +50,14 @@ tasks:
       - task: deps
 
   toolchain:
-    desc: Install the pinned TamaGo toolchain (go1.26.4, linux/amd64) under $TAMAGO_ROOT (~/.tamago by default)
+    desc: Install the pinned TamaGo toolchain (go1.26.6, linux/amd64) under $TAMAGO_ROOT (~/.tamago by default)
     status:
       - test -x "{{.TAMAGO_BIN}}"
     cmds:
       - mkdir -p "{{.TAMAGO_ROOT}}"
-      # Release tag is `tamago-go1.26.4` (upstream renamed from the old `go1.26.4`
-      # scheme ~2026-06); the asset keeps the `tamago-` prefix too. Both the tag
-      # path and the asset name therefore use `tamago-{{.TAMAGO_VERSION}}`.
+      # Release tag is `tamago-{{.TAMAGO_VERSION}}` (upstream renamed from the old
+      # bare-version scheme ~2026-06); the asset keeps the `tamago-` prefix too. Both
+      # the tag path and the asset name therefore use `tamago-{{.TAMAGO_VERSION}}`.
       - curl -fsSL -o /tmp/tamago-{{.TAMAGO_VERSION}}.tar.gz https://github.com/usbarmory/tamago-go/releases/download/tamago-{{.TAMAGO_VERSION}}/tamago-{{.TAMAGO_VERSION}}.linux-amd64.tar.gz
       # Verify the pinned checksum before trusting the toolchain (it is part of the
       # build TCB). Fails closed on a tampered/changed/corrupt artifact.
