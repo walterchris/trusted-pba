@@ -82,6 +82,17 @@ func verifyAndLoadOverride(target string, enforcing bool) error {
 // FileAuthentication pointer, arms the tbstub to authorize exactly [ptr,size) once,
 // and installs the stub. It fails closed if the protocol is absent. The returned
 // restore func reinstalls the original handler and disarms; call it (deferred).
+//
+// Security2 only — not the legacy EFI_SECURITY_ARCH_PROTOCOL (#92): a UEFI 2.3.1+
+// DXE core consults EFI_SECURITY2_ARCH_PROTOCOL.FileAuthentication for LoadImage
+// under Secure Boot; FileAuthenticationState is the pre-2.3.1 path. SHIM hooks
+// both for broad legacy-firmware reach the PBA (a modern-UEFI target) does not
+// need, and hooking a second protocol only widens the authorization surface.
+// Crucially, omitting the legacy hook is fail-closed, not fail-open: on the
+// hypothetical firmware that authenticated via the legacy protocol only, our
+// stub simply never fires, so the out-of-db image is rejected by firmware — a
+// boot failure, never a silent authorization. The enforcing-SB precondition and
+// verify-before-arm gate hold regardless of which protocol firmware calls.
 func installOverride(ptr *byte, size int) (restore func(), err error) {
 	addr, err := x64.UEFI.Boot.LocateProtocol(security2GUID)
 	if err != nil {

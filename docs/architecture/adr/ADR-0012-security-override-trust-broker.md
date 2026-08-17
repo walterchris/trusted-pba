@@ -273,3 +273,21 @@ one-shot disarm; accepting PCR 7 divergence as a conscious, documented call.
 
 Also: verify BitLocker's exact PCR 7 seal profile against a primary Microsoft source
 before *any* Windows use of the override.
+
+## Post-implementation reconciliation (ADR-0013, PR #88)
+
+This is the **spike** record; the accepted implementation (ADR-0013) resolved its two
+open design questions differently from the sketch above — noted here so a reader who
+lands on the spike is not misled:
+
+- **Authorization is by pointer+size identity, not a content `memcmp`.** The spike
+  found firmware passes our `SourceBuffer` through unchanged, so the stub authorizes
+  the exact buffer by `FileBuffer == armed_ptr && FileSize == armed_size` (a `memcmp`
+  against the same retained, GC-pinned buffer would re-compare bytes without re-running
+  Authenticode, so it adds nothing). See ADR-0013 and `internal/tbstub`.
+- **Only `EFI_SECURITY2_ARCH_PROTOCOL` is hooked, not the legacy
+  `EFI_SECURITY_ARCH_PROTOCOL`** (the spike open question "Security2 only or also
+  legacy?"). Modern UEFI 2.3.1+ firmware authenticates `LoadImage` via Security2;
+  hooking only it is fail-closed (a firmware using the legacy path would simply reject
+  the out-of-`db` image, never silently authorize it). Rationale recorded in ADR-0013
+  §Alternatives and at `installOverride` (`cmd/pba/override_trustbroker.go`) — #92.
