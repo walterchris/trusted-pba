@@ -52,7 +52,8 @@ var (
 // Verify reproduces firmware image authentication and returns nil only if the
 // image is trusted: its Authenticode hash is not revoked by dbx, its embedded
 // signature binds that hash, the signer chains to a db CA, and no certificate in
-// the chain is revoked by dbx. Any error means fail closed.
+// the signer's bundle or resolved chain (nor the db root) is revoked by dbx. Any
+// error means fail closed.
 func (v *Verifier) Verify(image []byte) (err error) {
 	// The go-uefi PE/Authenticode/PKCS#7 parsers run on attacker-controlled bytes
 	// and can panic on malformed structures (e.g. an out-of-range PE size field
@@ -105,8 +106,17 @@ func (v *Verifier) Verify(image []byte) (err error) {
 			if ok, err := pe.Verify(leaf); err != nil || !ok {
 				continue // this cert did not sign the image; try the next candidate
 			}
-			// leaf signed the image. Reject immediately if the leaf is revoked.
-			if v.revoked(leaf) {
+			// leaf signed the image (leaf ∈ certs, so this subsumes the leaf-only
+			// check). Revocation is disqualifying anywhere in the signer's bundled
+			// certs, not only on the chain x509.Verify ultimately returns: with a
+			// cross-signed or otherwise alternate path to db, Verify can build a
+			// winning chain that routes around a dbx-revoked intermediate the signer
+			// stapled, so checking only the returned chain(s) would miss it. Fail
+			// closed if any bundled cert is revoked (#91). (The per-chain loop below
+			// additionally covers a revoked db root, which is not part of the
+			// bundle.) A legitimate image does not bundle dbx-revoked material;
+			// rejecting one is the safe pre-boot direction.
+			if slices.ContainsFunc(certs, v.revoked) {
 				return ErrRevokedCert
 			}
 			intermediates := x509.NewCertPool()

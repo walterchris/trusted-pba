@@ -242,4 +242,22 @@ func TestVerifyFailsClosed(t *testing.T) {
 			t.Fatalf("want ErrRevokedCert, got %v", err)
 		}
 	})
+
+	t.Run("revoked bundled cert off the winning chain (#91)", func(t *testing.T) {
+		// The leaf chains DIRECTLY to the db root, so x509.Verify's winning chain
+		// is [leaf, root] and never includes the extra intermediate the signer also
+		// stapled into the PKCS#7 bundle. That extra cert is dbx-revoked. Checking
+		// only the returned chain(s) would miss it and boot the image (the #91 gap);
+		// checking the full bundle rejects it. Mutation guard: reverting the
+		// full-bundle loop in verify.go makes this the only failing subtest.
+		revoked := root.intermediate(t, "Revoked Bundled CA")
+		bundledSigned := signFixture(t, leafKey, leafCert, root.cert, revoked.cert)
+		v := &Verifier{
+			Roots:    []*x509.Certificate{root.cert},
+			DBXCerts: []*x509.Certificate{revoked.cert},
+		}
+		if err := v.Verify(bundledSigned); !errors.Is(err, ErrRevokedCert) {
+			t.Fatalf("want ErrRevokedCert for a revoked bundled cert off the winning chain, got %v", err)
+		}
+	})
 }
