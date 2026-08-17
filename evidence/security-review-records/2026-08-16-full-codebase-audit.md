@@ -103,9 +103,17 @@ layer already guards with its grow-budget reservation (`TestStartSessionReserves
 - **R-004 / R-006** — findings 2 & 3 are concrete instances of the already-Open
   release/supply-chain residuals; no rating change (latent, no shipped artifact).
 - **R-001, R-002, R-012, R-014** confirmed sound; no rating changes.
-- Known-open items unchanged: **#91** (dbx-by-cert winning-chain scope), **R-011**
-  (trust-anchor staleness), **R-005** (rollback), the update pipeline (R-006), **#81**
-  (selectSED heuristic), and the accepted `string(seed)` PBKDF2 transient.
+- **#91** (dbx-by-cert winning-chain scope) — **CLOSED by `fix/imageverify-dbx-full-bundle-91`
+  (2026-08-16, HEAD `b40e038`):** `Verify` now checks dbx-by-cert against every cert in the
+  signer's PKCS#7 bundle (`slices.ContainsFunc(certs, v.revoked)`), closing the revocation
+  bypass where a stapled dbx-revoked intermediate `x509.Verify` routed around was never
+  consulted; mutation-proven regression subtest `revoked bundled cert off the winning chain
+  (#91)`. go-reviewer + security-review-agent both APPROVE; no ADR (tightens acceptance, no
+  trust-decision change); R-001 residual stays Low. Review record
+  `evidence/security-review-records/2026-08-16-imageverify-dbx-full-bundle-91.md`.
+- Known-open items unchanged: **R-011** (trust-anchor staleness), **R-005** (rollback), the
+  update pipeline (R-006), **#81** (selectSED heuristic), and the accepted `string(seed)`
+  PBKDF2 transient.
 
 No ADR triggered (finding 1 is a secret-hygiene fix, no behavior change to the trust or
 unlock decision).
