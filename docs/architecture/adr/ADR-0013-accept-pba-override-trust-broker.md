@@ -69,6 +69,17 @@ The spike and production build-out (#82, tasks 1–5) are complete and validated
   work; unnecessary — the C-ABI asm stub + arm-from-Go pattern suffices (ADR-0012).
 - **`memcmp`-based authorization.** Was the ADR-0012 default; the spike showed firmware
   passes `SourceBuffer` through, so pointer+size identity is exact and cheaper.
+- **Also hook the legacy `EFI_SECURITY_ARCH_PROTOCOL` (as SHIM does).** Rejected —
+  resolves the ADR-0012 spike open question "Security2 only or also legacy?" (#92). A
+  UEFI 2.3.1+ DXE core consults `EFI_SECURITY2_ARCH_PROTOCOL.FileAuthentication` for
+  `LoadImage` under Secure Boot; `EFI_SECURITY_ARCH_PROTOCOL.FileAuthenticationState`
+  is the pre-2.3.1 path. SHIM hooks both for broad legacy-firmware compatibility the
+  PBA (a modern-UEFI target) does not need, and a second hooked protocol only widens
+  the authorization surface. Decisively, hooking Security2 only is **fail-closed, not
+  fail-open**: on a firmware that authenticated an image via the legacy protocol only,
+  our stub would simply never fire, so the out-of-`db` image is *rejected* by firmware
+  — a boot failure, never a silent authorization. Documented at `installOverride`
+  (`cmd/pba/override_trustbroker.go`).
 
 ## Security Impact
 Adds a deliberate, gated Secure Boot override (R-014). The PBA becomes an authority for
