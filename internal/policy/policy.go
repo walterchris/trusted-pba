@@ -70,6 +70,13 @@ type PIN []byte
 // credential.
 func (PIN) String() string { return "[redacted]" }
 
+// GoString implements fmt.GoStringer so the %#v verb also redacts. fmt does not
+// consult Stringer for %#v, so without this a %#v of a PIN — or of a Policy
+// containing one — would print the raw credential bytes (#122). The %d verb (a
+// decimal byte list) still bypasses both, but has no consumer here (a []byte
+// carries no default %d formatting) and is not a plausible accidental leak.
+func (PIN) GoString() string { return "[redacted]" }
+
 // UnmarshalJSON decodes a JSON string into the PIN bytes.
 func (p *PIN) UnmarshalJSON(data []byte) error {
 	var s string

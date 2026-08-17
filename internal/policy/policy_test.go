@@ -216,11 +216,21 @@ func TestParseDeriveParams(t *testing.T) {
 }
 
 // TestPINStringRedacts pins the structural never-log-PINs guard: formatting a
-// PIN must never yield the credential bytes.
+// PIN must never yield the credential bytes. Covers the common verbs plus %#v,
+// which fmt routes to GoString rather than Stringer (#122) — and a Policy that
+// embeds the PIN, so a whole-policy dump cannot leak it either.
 func TestPINStringRedacts(t *testing.T) {
-	for _, verb := range []string{"%v", "%s"} {
-		if got := fmt.Sprintf(verb, PIN("x")); got != "[redacted]" {
-			t.Errorf("Sprintf(%q, PIN) = %q, want %q", verb, got, "[redacted]")
+	secret := "correct horse battery staple"
+	for _, verb := range []string{"%v", "%s", "%q", "%x", "%#v"} {
+		if got := fmt.Sprintf(verb, PIN(secret)); strings.Contains(got, secret) {
+			t.Errorf("Sprintf(%q, PIN) = %q leaks the credential", verb, got)
+		}
+	}
+	// A Policy carrying the PIN must not leak it under %v or %#v either.
+	pol := &Policy{SEDCredential: &Credential{Source: CredentialPolicyPIN, PIN: PIN(secret)}}
+	for _, verb := range []string{"%v", "%#v"} {
+		if got := fmt.Sprintf(verb, pol); strings.Contains(got, secret) {
+			t.Errorf("Sprintf(%q, Policy) = %q leaks the credential", verb, got)
 		}
 	}
 }
