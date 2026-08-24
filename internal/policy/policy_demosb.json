@@ -1,0 +1,12 @@
+{
+  "require_secure_boot": true,
+  "sed_unlock": "none",
+  "on_error": "halt",
+  "entries": [
+    {
+      "name": "alpine-linux-signed",
+      "path": "EFI/LINUX/ALPINE.EFI",
+      "validation": "pba"
+    }
+  ]
+}
