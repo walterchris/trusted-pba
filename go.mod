@@ -19,7 +19,7 @@ require (
 	// (NVMe Security Send/Receive transport + Identify-Controller serial read)
 	// and ConnectController — for the A4 sedutil-PBKDF2 salt (#104) and
 	// serial-based drive targeting (#81).
-	github.com/walterchris/go-boot v1.6.2-tpba.6
+	github.com/walterchris/go-boot v1.6.2-tpba.7
 )
 
 require (
