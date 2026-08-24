@@ -5,7 +5,7 @@
 # driver was dispatched, installed its protocol, and did not break the boot
 # (the boot app still runs). Full PBA-unlock integration is a later task.
 #
-#   smoke.sh <bootapp.efi>     e.g. bin/testapp.efi (task testapp)
+#   smoke.sh <bootapp.efi>     e.g. bin/testapp.efi (task build:testapp)
 #
 # Requires MockOpalDxe.efi (run ./build.sh first) and the test/qemu harness
 # prerequisites (qemu, OVMF, mtools, python3 + virt-firmware).

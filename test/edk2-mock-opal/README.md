@@ -100,7 +100,7 @@ and stage the driver via `run-qemu.sh`'s `DRIVER=` env (placed at
 `\EFI\MOCK\MOCKOPALDXE.EFI` on the ESP):
 
 ```sh
-./smoke.sh ../../bin/testapp.efi   # dispatch smoke (build testapp via `task testapp`)
+./smoke.sh ../../bin/testapp.efi   # dispatch smoke (build testapp via `task build:testapp`)
 ```
 
 **Competing instance note:** QEMU's IDE/SATA disks advertise IDENTIFY word 48

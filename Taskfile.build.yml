@@ -1,0 +1,141 @@
+# Taskfile (build:) — toolchain + artifact builds for Trusted PBA.
+#
+# Included by the root Taskfile as the `build:` namespace, and re-included
+# (internal) by Taskfile.test.yml / Taskfile.demo.yml so their matrices can call
+# the shared builders as dependencies. This file owns the TamaGo toolchain and
+# every .efi/fixture build; nothing here launches QEMU.
+#
+# TamaGo resolves from $TAMAGO (an existing toolchain) if set, else a managed
+# install under $TAMAGO_ROOT (default ~/.tamago/<version>); `build:toolchain`
+# installs it automatically when missing.
+version: '3'
+
+env:
+  # Exported for any go subprocess that consults it.
+  TAMAGO: '{{.TAMAGO_BIN}}'
+
+vars:
+  # --- toolchain ---
+  TAMAGO_VERSION: go1.26.6
+  # SHA-256 of tamago-{{.TAMAGO_VERSION}}.linux-amd64.tar.gz, verified on download
+  # (supply-chain hygiene, baseline §14/§19; #27). Recompute when bumping the pin.
+  TAMAGO_SHA256: d9a59d85886ef9a755ce7d8ae5a8a4cf60a6b50292cbfafaa058a2ccaf90f00f
+  TAMAGO_ROOT:
+    sh: echo "${TAMAGO_ROOT:-$HOME/.tamago/{{.TAMAGO_VERSION}}}"
+  TAMAGO_BIN:
+    sh: echo "${TAMAGO:-{{.TAMAGO_ROOT}}/bin/go}"
+  # --- dependency pins (bump deliberately; supply-chain hygiene, baseline §14) ---
+  GOBOOT_VERSION: v1.6.2
+  TAMAGO_LIB_VERSION: v1.26.6
+  # --- build ---
+  APP: trusted-pba
+  BIN: bin
+  IMAGE_BASE: '10000000'            # PE image base 0x10000000
+  TEXT_START: '268500992'           # 0x10010000 = IMAGE_BASE + 0x10000
+  BUILD_TAGS: linkcpuinit,linkramsize,linkramstart,linkprintk
+  GOENV: GOOS=tamago GOOSPKG=github.com/usbarmory/tamago GOARCH=amd64
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+
+tasks:
+  toolchain:
+    desc: Install the pinned TamaGo toolchain (go1.26.6, linux/amd64) under $TAMAGO_ROOT (~/.tamago by default)
+    status:
+      - test -x "{{.TAMAGO_BIN}}"
+    cmds:
+      - mkdir -p "{{.TAMAGO_ROOT}}"
+      # Release tag is `tamago-{{.TAMAGO_VERSION}}` (upstream renamed from the old
+      # bare-version scheme ~2026-06); the asset keeps the `tamago-` prefix too. Both
+      # the tag path and the asset name therefore use `tamago-{{.TAMAGO_VERSION}}`.
+      - curl -fsSL -o /tmp/tamago-{{.TAMAGO_VERSION}}.tar.gz https://github.com/usbarmory/tamago-go/releases/download/tamago-{{.TAMAGO_VERSION}}/tamago-{{.TAMAGO_VERSION}}.linux-amd64.tar.gz
+      # Verify the pinned checksum before trusting the toolchain (it is part of the
+      # build TCB). Fails closed on a tampered/changed/corrupt artifact.
+      - echo "{{.TAMAGO_SHA256}}  /tmp/tamago-{{.TAMAGO_VERSION}}.tar.gz" | sha256sum -c -
+      # Tarball uses absolute paths (usr/local/tamago-go/...); strip them so the
+      # toolchain lands directly under TAMAGO_ROOT (TAMAGO_ROOT/bin/go).
+      - tar -xzf /tmp/tamago-{{.TAMAGO_VERSION}}.tar.gz -C "{{.TAMAGO_ROOT}}" --strip-components=3
+      - '"{{.TAMAGO_BIN}}" version'
+
+  deps:
+    desc: Resolve and pin Go module dependencies (go-boot, tamago)
+    deps: [toolchain]
+    cmds:
+      - '{{.GOENV}} "{{.TAMAGO_BIN}}" get github.com/usbarmory/go-boot@{{.GOBOOT_VERSION}} github.com/usbarmory/tamago@{{.TAMAGO_LIB_VERSION}}'
+      - '{{.GOENV}} "{{.TAMAGO_BIN}}" mod tidy'
+
+  # _efi builds cmd/pba into a PE/EFI app. OUT = output basename in bin/;
+  # EXTRA_TAGS = extra build tags appended after BUILD_TAGS (e.g. ",policytest").
+  # objcopy wraps ELF->efi-app, then the PE COFF Characteristics at offset 150 are
+  # patched to 0x0226 (go-boot convention); qemu-smoke guards a non-bootable result.
+  _efi:
+    internal: true
+    deps: [toolchain]
+    cmds:
+      - mkdir -p {{.BIN}}
+      - >-
+        {{.GOENV}} "{{.TAMAGO_BIN}}" build -tags {{.BUILD_TAGS}}{{.EXTRA_TAGS}} -trimpath
+        -ldflags "-s -w -E cpuinit -T {{.TEXT_START}} -R 0x1000 -X 'main.Version={{.VERSION}}'"
+        -o {{.BIN}}/{{.OUT}} ./cmd/pba
+      - >-
+        objcopy --strip-debug --output-target efi-app-x86_64 --subsystem=efi-app
+        --image-base 0x{{.IMAGE_BASE}} --stack=0x10000
+        {{.BIN}}/{{.OUT}} {{.BIN}}/{{.OUT}}.efi
+      - printf '\x26\x02' | dd of={{.BIN}}/{{.OUT}}.efi bs=1 seek=150 count=2 conv=notrunc,fsync status=none
+      - echo "built {{.BIN}}/{{.OUT}}.efi (version {{.VERSION}})"
+
+  efi:
+    desc: Build bin/trusted-pba.efi
+    cmds:
+      - task: _efi
+        vars: { OUT: '{{.APP}}', EXTRA_TAGS: "" }
+
+  testapp:
+    desc: Build the gnu-efi chainload test fixture (bin/testapp.efi)
+    vars:
+      # gnu-efi link inputs / headers; override via $EFILIB / $EFIINC if a distro
+      # places them elsewhere than the Fedora/Ubuntu default of /usr/lib + /usr/include/efi.
+      EFILIB:
+        sh: echo "${EFILIB:-/usr/lib}"
+      EFIINC:
+        sh: echo "${EFIINC:-/usr/include/efi}"
+      CFLAGS: -I{{.EFIINC}} -I{{.EFIINC}}/x86_64 -fpic -ffreestanding -fno-stack-protector -fno-strict-aliasing -fshort-wchar -mno-red-zone -Wall
+    cmds:
+      - mkdir -p {{.BIN}}
+      - gcc {{.CFLAGS}} -c test/fixtures/testapp/testapp.c -o {{.BIN}}/testapp.o
+      - >-
+        ld {{.BIN}}/testapp.o {{.EFILIB}}/crt0-efi-x86_64.o -nostdlib -znocombreloc
+        -T {{.EFILIB}}/elf_x86_64_efi.lds -shared -Bsymbolic -L{{.EFILIB}} -lgnuefi -lefi
+        -o {{.BIN}}/testapp.so
+      # Full canonical gnu-efi section list — the relocation sections (.rel*/.rela*)
+      # are required or the loaded image's pointers are not fixed up (garbage output).
+      - >-
+        objcopy -j .text -j .sdata -j .data -j .dynamic -j .dynsym
+        -j '.rel.*' -j '.rela.*' -j .rel -j .rela -j .reloc
+        --output-target efi-app-x86_64 {{.BIN}}/testapp.so {{.BIN}}/testapp.efi
+      - echo "built {{.BIN}}/testapp.efi"
+
+  tpmread:
+    desc: Build the gnu-efi EFI_TCG2 PCR-reader fixture (bin/tpmread.efi) for measured-boot tests
+    vars:
+      EFILIB:
+        sh: echo "${EFILIB:-/usr/lib}"
+      EFIINC:
+        sh: echo "${EFIINC:-/usr/include/efi}"
+      CFLAGS: -I{{.EFIINC}} -I{{.EFIINC}}/x86_64 -fpic -ffreestanding -fno-stack-protector -fno-strict-aliasing -fshort-wchar -mno-red-zone -Wall
+    cmds:
+      - mkdir -p {{.BIN}}
+      - gcc {{.CFLAGS}} -c test/fixtures/tpmread/tpmread.c -o {{.BIN}}/tpmread.o
+      - >-
+        ld {{.BIN}}/tpmread.o {{.EFILIB}}/crt0-efi-x86_64.o -nostdlib -znocombreloc
+        -T {{.EFILIB}}/elf_x86_64_efi.lds -shared -Bsymbolic -L{{.EFILIB}} -lgnuefi -lefi
+        -o {{.BIN}}/tpmread.so
+      - >-
+        objcopy -j .text -j .sdata -j .data -j .dynamic -j .dynsym
+        -j '.rel.*' -j '.rela.*' -j .rel -j .rela -j .reloc
+        --output-target efi-app-x86_64 {{.BIN}}/tpmread.so {{.BIN}}/tpmread.efi
+      - echo "built {{.BIN}}/tpmread.efi"
+
+  mock-opal:
+    desc: Build the EDK2 MockOpalDxe driver (test/edk2-mock-opal) used by the SED matrices
+    cmds:
+      - test/edk2-mock-opal/build.sh

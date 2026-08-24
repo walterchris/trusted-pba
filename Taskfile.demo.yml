@@ -1,0 +1,51 @@
+# Taskfile (demo:) — human-facing, watchable showcases of the full boot flow.
+#
+# Included by the root Taskfile as the `demo:` namespace. Unlike the test: matrices
+# (headless, assertion-driven, CI-safe), these are meant to be run interactively in
+# a terminal / graphical QEMU window to demonstrate a real unlock-and-chainload.
+#
+# The `build:` namespace is re-included (internal) so demos can build the PBA and
+# fixtures without re-appearing in `task --list`.
+version: '3'
+
+includes:
+  build:
+    taskfile: ./Taskfile.build.yml
+    internal: true
+
+vars:
+  APP: trusted-pba
+  BIN: bin
+
+tasks:
+  linux:
+    desc: 'Watchable full-flow demo — PBA banner → Secure Boot state → mock Opal SED unlock (MockOpalDxe) → chainload → a REAL Alpine Linux boots to login, in a QEMU window. Downloads a small Alpine ISO on first run (cached in .demo-cache/). SERIAL=1 for headless. Needs qemu, OVMF, mtools, parted, xorriso, ukify+systemd-boot stub, virt-firmware, EDK2 build deps.'
+    cmds:
+      - task: build:mock-opal
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-demolinux', EXTRA_TAGS: ",demolinux" }
+      - test/qemu/demo-linux.sh {{.BIN}}/{{.APP}}-demolinux.efi
+
+  secureboot:
+    desc: 'Watchable Secure Boot + trust-broker demo — OVMF with SB ENFORCING and our keys enrolled: firmware validates the signed PBA (hop 1) → the PBA trust-brokers the OS (`pba` validation of the Alpine UKI signed by a second key we added to the broker, hop 2) → firmware re-validates on load (hop 3) → real Alpine boots. Downloads Alpine on first run (cached). SERIAL=1 for headless. Needs qemu, OVMF, mtools, parted, xorriso, ukify+stub, sbsign, openssl, virt-firmware.'
+    cmds:
+      - test/qemu/demo-secureboot-setup.sh
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-demosb', EXTRA_TAGS: ",pbatest,demosb" }
+      - test/qemu/demo-secureboot.sh {{.BIN}}/{{.APP}}-demosb.efi
+
+  windows:
+    desc: 'Watchable Secure Boot → Windows demo — OVMF with SB ENFORCING, our key + the Microsoft db/dbx enrolled: firmware validates the signed PBA → the PBA hands off to the Windows Boot Manager, which the FIRMWARE validates via the Microsoft db (BitLocker-safe path) → real Windows 11 boots and you see the screen. Fetches a Windows 11 Enterprise Eval ISO on first run (cached; or set WIN_ISO=<path>). SCREENSHOT=<png> for a headless capture. Needs qemu, OVMF, mtools, parted, xorriso, sbsign, openssl, virt-firmware, swtpm.'
+    cmds:
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-demowin', EXTRA_TAGS: ",demowin" }
+      - test/qemu/demo-windows.sh {{.BIN}}/{{.APP}}-demowin.efi
+
+  sed:
+    desc: 'MANUAL/interactive: exercise the console credential source (ADR-0011 A2) in QEMU with the MockOpalDxe SED — you type the SED passphrase at the prompt ("correct horse" unlocks). Run in a terminal, not CI. Needs EDK2 build deps + virt-firmware.'
+    cmds:
+      - task: build:mock-opal
+      - task: build:testapp
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-consoletest', EXTRA_TAGS: ",consoletest" }
+      - test/qemu/console-manual.sh {{.BIN}}/{{.APP}}-consoletest.efi {{.BIN}}/testapp.efi
