@@ -56,7 +56,7 @@ Boot trust chain (a core asset, baseline §10) and the Phase-2 detection-failure
 fail-open boundary; that documentation is deferred to those issues and tracked here.
 
 ## Test Impact
-Secure Boot matrix (`task sb-matrix`): SB-off unsigned boots; SB-on signed boots;
+Secure Boot matrix (`task test:sb`): SB-off unsigned boots; SB-on signed boots;
 SB-on unsigned rejected by firmware (fail closed). Plus a host unit test for the
 `secureboot.State.Enforcing()` logic.
 

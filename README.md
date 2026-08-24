@@ -100,12 +100,29 @@ TEST-APP: ok
 TRUSTED-PBA: chainload returned
 ```
 
-Want the full show from the GIF — **unlock a (virtual) Opal SED, then boot a real Linux
-kernel**? That's a CI matrix job:
+### Watchable demos
+
+Want the full show — **the PBA unlocking a (virtual) Opal SED and handing off to a real OS**,
+in a graphical QEMU window? The `demo:*` tasks download a small Alpine image on first run
+(cached in `.demo-cache/`) and boot the whole flow. Add `SERIAL=1` for a headless serial run.
 
 ```bash
-task mock-opal-matrix     # unlock a mock Opal SED → MBRDone → chainload (+ fail-closed negatives)
-task linux-boot-matrix    # unlock, then chainload a REAL Linux kernel to userspace
+task demo:linux        # mock SED unlock → chainload → REAL Alpine Linux to a login prompt
+task demo:secureboot   # Secure Boot ENFORCING: firmware validates the signed PBA → the PBA
+                       # trust-brokers a second-key-signed OS (pba validation) → Alpine boots
+task demo:sed          # interactive: type the SED passphrase yourself to unlock (console source)
+```
+
+`demo:secureboot` is the trust-broker story end to end: OVMF boots with Secure Boot enforcing
+and our keys enrolled, the firmware validates the PBA, and then the **PBA** verifies the OS's
+Authenticode against a CA embedded in its own trust store before loading it — tamper the OS and
+it fails closed (`signer does not chain to a trusted db certificate`), never booting.
+
+The same paths are asserted headlessly in CI:
+
+```bash
+task test:opal-mock       # unlock a mock Opal SED → MBRDone → chainload (+ fail-closed negatives)
+task test:linux           # unlock, then chainload a REAL Linux kernel to userspace
 task check                # local CI: lint + unit/fuzz tests + the QEMU matrices
 ```
 
@@ -247,11 +264,11 @@ with no hardware:
 | Suite | What it proves |
 |---|---|
 | `task test` / `task lint` / fuzz | Opal codec, policy parse, Authenticode verify, Secure Boot state — with fuzzing and fail-closed negatives |
-| `task mock-opal-matrix` | End-to-end unlock → `MBRDone` → chainload against the EDK2 `MockOpalDxe` SED, plus auth-fail / MBRDone-fail / partial-unlock / no-driver negatives |
-| `task nvme-opal-matrix` | The same unlock over the **NVMe-passthru** carrier, incl. sedutil-pbkdf2 auto-iteration |
-| `task linux-boot-matrix` | Unlock, then chainload a **real Linux kernel** to userspace (+ a fail-closed "locked drive never boots an OS" negative) |
-| `task sb-matrix` / `task pba-matrix` | Secure Boot & `pba`-validation: accept trusted, reject unsigned / untrusted-key / `dbx`-revoked |
-| `task win-handoff` / `task override-pcr` | Windows handoff (real MS-signed loader); PCR-7 divergence of `pba-override` under a vTPM |
+| `task test:opal-mock` | End-to-end unlock → `MBRDone` → chainload against the EDK2 `MockOpalDxe` SED, plus auth-fail / MBRDone-fail / partial-unlock / no-driver negatives |
+| `task test:opal-nvme` | The same unlock over the **NVMe-passthru** carrier, incl. sedutil-pbkdf2 auto-iteration |
+| `task test:linux` | Unlock, then chainload a **real Linux kernel** to userspace (+ a fail-closed "locked drive never boots an OS" negative) |
+| `task test:sb` / `task test:pba` | Secure Boot & `pba`-validation: accept trusted, reject unsigned / untrusted-key / `dbx`-revoked |
+| `task test:win-handoff` / `task test:override-pcr` | Windows handoff (real MS-signed loader); PCR-7 divergence of `pba-override` under a vTPM |
 
 Every negative is **mutation-proven** — a deliberately fail-open build is caught by the
 matrix. Real hardware, real Windows boot, and the faithful Shadow-MBR reveal are not covered

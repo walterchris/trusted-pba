@@ -40,7 +40,7 @@ committed CycloneDX SBOM.
 - **Modules:** every dependency is pinned by version in `go.mod` and hash-locked in
   `go.sum`. No floating versions. Bumps are deliberate (§4).
 - **TamaGo toolchain:** pinned (`TAMAGO_VERSION` in `Taskfile.yml`) **and
-  checksum-verified** — `task toolchain` records the tarball SHA-256
+  checksum-verified** — `task build:toolchain` records the tarball SHA-256
   (`TAMAGO_SHA256`) and verifies it before extracting, failing closed on a
   tampered/changed artifact. (Added after the 2026-06-14 break, where upstream
   re-tagged its releases and an unverified download 404'd; see #9.)
