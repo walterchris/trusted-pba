@@ -1,4 +1,4 @@
-//go:build pbatest && !sedtest && !overridetest
+//go:build pbatest && !sedtest && !overridetest && !demosb
 
 package policy
 
