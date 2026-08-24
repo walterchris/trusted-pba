@@ -14,6 +14,9 @@ Security for the first real-hardware bring-up; see *Amendment 2026-06-28* below)
 Amended 2026-07-06: pin bumped to `v1.6.2-tpba.6` (NVMe PassThru transport +
 Identify-Controller serial read + ConnectController; for the A4 sedutil-PBKDF2
 salt #104 and serial-based drive targeting #81; see *Amendment 2026-07-06* below).
+Amended 2026-08-24: pin bumped to `v1.6.2-tpba.7` (fork commit `ce4d75b`,
+`uefi/path.go` FilePath device-path normalization for the Windows Boot Manager
+handoff; see *Amendment 2026-08-24* below).
 
 ## Context
 go-boot v1.6.2 wraps only a **fixed set** of UEFI protocols/services (graphics,
@@ -221,6 +224,51 @@ and Identify-Controller `SerialNumber`) as a second `opal.Transport` carrier tha
 also exposes the drive serial (the sedutil-pbkdf2 salt) via `credential.Serialer`.
 So "not yet selected" above no longer holds: `cmd/pba run()` selects the NVMe
 carrier for the `sedutil-pbkdf2` derive. Status unchanged (Accepted); no fork change.
+
+## Amendment (2026-08-24): `v1.6.2-tpba.7` — FilePath normalization (Windows handoff)
+
+Bringing up the firmware-validated Windows path (the `demo:windows` showcase:
+`require_secure_boot` + `validation: firmware` on `EFI\Microsoft\Boot\bootmgfw.efi`)
+exposed a chainload defect in `uefi/path.go`. `FilePath()` encoded the caller's name
+into the `FILEPATH_DEVICE_PATH` node **verbatim**, so a relative, forward-slash name
+(our policy target `EFI/MICROSOFT/BOOT/BOOTMGFW.EFI`) produced a malformed node. The
+**Windows Boot Manager re-opens its own image via `LoadedImage->FilePath`** to
+self-measure into the TPM (PCR); with a relative/slash node that open fails and
+bootmgr bails to recovery (`0xc000000d`) immediately after loading its CI policies.
+Fixed in `v1.6.2-tpba.7` (commit `ce4d75b`):
+
+1. **`uefi/path.go` FilePath absolute-backslash normalization (upstream file).**
+   `FilePath()` now converts `/`→`\` and prepends a leading `\` before encoding, so
+   the emitted `FILEPATH_DEVICE_PATH` node is always the absolute, backslash-separated
+   form the UEFI spec (2.10 §10.3.5.4) requires. This is the **second functional edit
+   to `uefi/path.go`** (after the `tpba.4` F-L5 Length guard), so the re-base process
+   now re-applies **two** `path.go` edits alongside the `uefi.s` alignment fix and the
+   `error.go` typed errors. Good upstream-PR candidate with the others.
+
+**Scope of behavior change:** the normalization applies to **every** chainload
+target, not only Windows — every `FilePath` node the loader emits is now well-formed.
+Linux/custom targets were already passed absolute-backslash paths, so their emitted
+node is unchanged in effect; the QEMU linux/secureboot matrices still boot.
+
+**Security impact:** no weakening. The Windows path remains `require_secure_boot`
+with the target **firmware-validated** (the pre-existing "let firmware validate
+Windows Boot Manager" decision, CLAUDE.md / ADR-0006); this bump only makes the
+device-path node the firmware and bootmgr consume **well-formed**, enabling the
+handoff and the bootmgr TPM self-measure that a malformed node broke. It is a pure
+normalization of a caller-supplied, in-TCB value (no new input, no new attacker
+surface); fail-closed is preserved — a target that fails db validation is still
+rejected, and an unresolved/absent target still fails closed. Pinned by tag +
+`go.sum` hash (published-tag hash recorded); no new external/indirect deps (the
+change adds only a stdlib `strings` import), so the #27 scan set and R-006 are
+unchanged.
+
+**Evidence:** the DEBUG-OVMF firmware-log differential (before: bootmgr device path
+`.../HD(...)/EFI/MICROSOFT/BOOT/BOOTMGFW.EFI`, forward-slash, → recovery; after:
+`.../HD(...)/\EFI\MICROSOFT\BOOT\BOOTMGFW.EFI`, backslash, → `boot.stl`/`boot.wim`/
+`boot.sdi` load and Windows boots) and the end-to-end boot proof (PBA → Windows 11
+Setup GUI from install media, and an installed disk to the Windows 11 login screen,
+both under Secure Boot enforcing). Record:
+`evidence/security-review-records/2026-08-24-go-boot-tpba7-filepath-windows-handoff.md`.
 
 ## Alternatives Considered
 - **In-repo `unsafe`+asm UEFI-call primitive** — keeps everything in our tree but
