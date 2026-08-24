@@ -37,3 +37,6 @@ test/qemu/ovmf/*_VARS*.fd
 # Python bytecode (test/qemu/*.py helpers)
 __pycache__/
 *.pyc
+
+# Demo ISO cache (task demo:*) — large, never committed
+.demo-cache/

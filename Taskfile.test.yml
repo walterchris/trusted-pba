@@ -1,0 +1,137 @@
+# Taskfile (test:) — QEMU/OVMF integration matrices + fail-closed negatives.
+#
+# Included by the root Taskfile as the `test:` namespace. Everything here launches
+# QEMU (or a host release-policy check); the everyday host verbs (`test`, `lint`,
+# `vet`, `fmt`, the `run` smoke, the `check` aggregate) live in the root Taskfile.
+#
+# The `build:` namespace is re-included here (internal, so it does not re-appear in
+# `task --list`) so each matrix can build its variant .efi via build:_efi and the
+# shared fixtures via build:testapp / build:tpmread / build:mock-opal.
+version: '3'
+
+includes:
+  build:
+    taskfile: ./Taskfile.build.yml
+    internal: true
+
+vars:
+  # Mirror of build:'s output location + app name (go-task vars are file-scoped, so
+  # each Taskfile that builds artifact paths declares them; the source of truth is
+  # Taskfile.build.yml). These two are effectively constant.
+  APP: trusted-pba
+  BIN: bin
+
+tasks:
+  negative:
+    desc: Boot the PBA with NO chainload target staged; assert it fails closed (no success)
+    cmds:
+      - task: build:efi
+      - >-
+        REQUIRE='TRUSTED-PBA: sed unlock not required by policy,TRUSTED-PBA: chainload failed'
+        FORBID='TRUSTED-PBA: chainload returned,TEST-APP: ok,TRUSTED-PBA: sed unlock ok,TRUSTED-PBA: sed unlock failed'
+        python3 test/qemu/expect-serial.py {{.BIN}}/{{.APP}}.efi
+
+  sb:
+    desc: Secure Boot matrix — SB off / enforcing-signed / enforcing-unsigned-rejected / dbx-hash-revoked (needs virt-firmware, sbsign, openssl, host go)
+    cmds:
+      - task: build:efi
+      - task: build:testapp
+      - test/qemu/secureboot-matrix.sh {{.BIN}}/{{.APP}}.efi {{.BIN}}/testapp.efi
+
+  sb-require:
+    desc: Build a require_secure_boot policy variant and assert it fails closed when Secure Boot is off
+    cmds:
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-policytest', EXTRA_TAGS: ",policytest" }
+      - >-
+        REQUIRE='policy requires Secure Boot enforcing'
+        FORBID='TEST-APP: ok,TRUSTED-PBA: chainload returned,TRUSTED-PBA: sed unlock ok,TRUSTED-PBA: sed unlock failed'
+        python3 test/qemu/expect-serial.py {{.BIN}}/{{.APP}}-policytest.efi
+
+  pba:
+    desc: PBA verify-then-load matrix — embed a test CA, sign the fixture, assert accept + fail-closed reject (needs sbsign, openssl)
+    cmds:
+      - task: build:testapp
+      - test/qemu/pba-setup.sh {{.BIN}}/testapp.efi
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-pbatest', EXTRA_TAGS: ",pbatest" }
+      - test/qemu/pba-run.sh {{.BIN}}/{{.APP}}-pbatest.efi {{.BIN}}/testapp.efi
+
+  override:
+    desc: 'pba-override trust-broker matrix — CONTROL (firmware rejects out-of-db) / POS (override boots) / TAMPER (unsigned fails closed) / SB-OFF (refuses when not enforcing). Gated behind -tags trustbroker (needs sbsign, virt-firmware, openssl).'
+    cmds:
+      - task: build:testapp
+      - test/qemu/pba-setup.sh {{.BIN}}/testapp.efi
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-pbatest', EXTRA_TAGS: ",pbatest" }
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-overridetest', EXTRA_TAGS: ",overridetest,pbatest,trustbroker" }
+      - test/qemu/override-trustbroker.sh {{.BIN}}/{{.APP}}-pbatest.efi {{.BIN}}/{{.APP}}-overridetest.efi {{.BIN}}/pbatest/testapp-signed.efi {{.BIN}}/testapp.efi
+
+  opal-mock:
+    desc: Mock-Opal integration matrix — unlock→MBRDone→chainload + fault negatives against MockOpalDxe in QEMU/OVMF (needs EDK2 build deps, sbsign, virt-firmware)
+    cmds:
+      - task: build:mock-opal
+      - task: build:testapp
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-sedtest', EXTRA_TAGS: ",sedtest" }
+      - test/qemu/mock-opal-matrix.sh {{.BIN}}/{{.APP}}-sedtest.efi {{.BIN}}/testapp.efi
+
+  opal-nvme:
+    desc: 'NVMe-passthru Opal matrix (#110) — sedutil-pbkdf2 auto unlock over EFI_NVM_EXPRESS_PASS_THRU (Identify salt + Security Send/Recv session): POS (auto advances 500000→75000 → unlock + chainload) + NEG (auth-lockout stops after one try; no driver → hard fail). Headless/CI-safe. Needs EDK2 build deps + virt-firmware.'
+    cmds:
+      - task: build:mock-opal
+      - task: build:testapp
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-sednvmetest', EXTRA_TAGS: ",sednvmetest,hwdebug" }
+      - test/qemu/nvme-opal-matrix.sh {{.BIN}}/{{.APP}}-sednvmetest.efi {{.BIN}}/testapp.efi
+
+  linux:
+    desc: 'Linux-boot matrix — mock-SED unlock → chainload a real Linux UKI (distro kernel + Go-init initramfs) to userspace: POS, NEG (auth-fail → OS never boots), POS under enforcing Secure Boot. Needs EDK2 build deps, host go, ukify + sd-boot stub, sbsign, virt-firmware.'
+    cmds:
+      - task: build:mock-opal
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-sedtest', EXTRA_TAGS: ",sedtest" }
+      - test/qemu/build-linux-uki.sh {{.BIN}}/linux-uki.efi
+      - test/qemu/linux-boot-matrix.sh {{.BIN}}/{{.APP}}-sedtest.efi {{.BIN}}/linux-uki.efi
+
+  console:
+    desc: 'Console credential-source matrix (ADR-0011 A2, #99) — automated QMP send-key injection: POS (correct horse → unlock ok) + NEG (wrong pass → fail closed). Headless/CI-safe; no human keystrokes. Needs EDK2 build deps + virt-firmware.'
+    cmds:
+      - task: build:mock-opal
+      - task: build:testapp
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-consoletest', EXTRA_TAGS: ",consoletest" }
+      - test/qemu/console-matrix.sh {{.BIN}}/{{.APP}}-consoletest.efi {{.BIN}}/testapp.efi
+
+  keyfile:
+    desc: 'Keyfile credential-source matrix (ADR-0011 A3, #100) — stage a key on the ESP, boot the keyfiletest PBA + MockOpalDxe: POS (correct key → unlock ok + chainload) + NEG (wrong key → fail closed). Headless/CI-safe. Needs EDK2 build deps + virt-firmware.'
+    cmds:
+      - task: build:mock-opal
+      - task: build:testapp
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-keyfiletest', EXTRA_TAGS: ",keyfiletest" }
+      - test/qemu/keyfile-matrix.sh {{.BIN}}/{{.APP}}-keyfiletest.efi {{.BIN}}/testapp.efi
+
+  win-handoff:
+    desc: Windows-handoff (A') — real Microsoft-signed loader verified by the PBA and loaded via firmware db under Secure Boot (needs sbsign, virt-firmware; set TPBA_REAL_WINLOADER/TPBA_REAL_SHIM or it skips). See ADR-0011.
+    cmds:
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-winhandoff', EXTRA_TAGS: ",winhandoff,trustfull" }
+      - test/qemu/win-handoff.sh {{.BIN}}/{{.APP}}-winhandoff.efi
+
+  override-pcr:
+    desc: 'ADR-0012 task 5: prove pba-override diverges PCR 7 (builds a TPM-enabled OVMF via build-ovmf-tpm.sh; needs swtpm, sbsign, virt-firmware, gnu-efi)'
+    cmds:
+      - task: build:testapp
+      - task: build:tpmread
+      - test/qemu/pba-setup.sh {{.BIN}}/testapp.efi
+      - task: build:_efi
+        vars: { OUT: '{{.APP}}-overridetest', EXTRA_TAGS: ",overridetest,pbatest,trustbroker" }
+      - task: build:efi
+      - test/qemu/override-pcr.sh {{.BIN}}/{{.APP}}-overridetest.efi {{.BIN}}/{{.APP}}.efi {{.BIN}}/tpmread.efi
+
+  release-policy:
+    desc: 'Release gate: fail unless the DEFAULT embedded policy is release-ready (Secure Boot required, SED unlock not skipped, no test-fixture target). release.yml runs this; PR CI does not — the dev default is legitimately not release-ready until real auth lands.'
+    cmds:
+      - go run ./cmd/release-policy-check internal/policy/policy.json

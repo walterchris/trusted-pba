@@ -32,7 +32,7 @@ jobs:
       # be skipped, and no test-fixture boot target. PR CI does not check this: the
       # dev default is legitimately not release-ready until real auth lands.
       - name: Release policy gate (default embedded policy must be release-ready)
-        run: task check-release-policy
+        run: task test:release-policy
       - name: Build release artifact (placeholder)
         run: |
           echo "TODO: reproducible TamaGo build of trusted-pba.efi for ${{ inputs.version }}"

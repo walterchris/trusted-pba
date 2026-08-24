@@ -145,7 +145,7 @@ jobs:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       # Cache the pinned TamaGo toolchain (task build/setup installs it under
-      # ~/.tamago when absent; `task toolchain`'s status check then skips the
+      # ~/.tamago when absent; `task build:toolchain`'s status check then skips the
       # download). Keyed on Taskfile.yml, which carries the version + checksum.
       - name: Cache pinned TamaGo toolchain
         uses: actions/cache@v4
@@ -155,7 +155,7 @@ jobs:
       - name: Build trusted-pba.efi (task installs the pinned TamaGo toolchain)
         run: task build
       - name: Build chainload test fixture (gnu-efi)
-        run: task testapp
+        run: task build:testapp
       - name: QEMU/OVMF chainload smoke test (assert markers)
         shell: bash
         env:
@@ -169,12 +169,12 @@ jobs:
         # rename can't desync CI from `task check` (audit F-S18).
         run: |
           set -o pipefail
-          task run-negative | tee -a qemu-serial.log
+          task test:negative | tee -a qemu-serial.log
       - name: QEMU/OVMF Secure-Boot-required fail-closed test (require_secure_boot policy, SB off)
         shell: bash
         run: |
           set -o pipefail
-          task sb-require-test | tee -a qemu-serial.log
+          task test:sb-require | tee -a qemu-serial.log
       - name: Upload serial log
         if: always()
         uses: actions/upload-artifact@v4
@@ -223,7 +223,7 @@ jobs:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       # Cache the pinned TamaGo toolchain (task build/setup installs it under
-      # ~/.tamago when absent; `task toolchain`'s status check then skips the
+      # ~/.tamago when absent; `task build:toolchain`'s status check then skips the
       # download). Keyed on Taskfile.yml, which carries the version + checksum.
       - name: Cache pinned TamaGo toolchain
         uses: actions/cache@v4
@@ -231,7 +231,7 @@ jobs:
           path: ~/.tamago
           key: tamago-${{ runner.os }}-${{ hashFiles('Taskfile.yml') }}
       - name: PBA verify-then-load matrix (pba-accept signed / pba-reject unsigned fail-closed)
-        run: task pba-matrix
+        run: task test:pba
 
   qemu-secureboot-matrix:
     runs-on: ubuntu-latest
@@ -256,7 +256,7 @@ jobs:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       # Cache the pinned TamaGo toolchain (task build/setup installs it under
-      # ~/.tamago when absent; `task toolchain`'s status check then skips the
+      # ~/.tamago when absent; `task build:toolchain`'s status check then skips the
       # download). Keyed on Taskfile.yml, which carries the version + checksum.
       - name: Cache pinned TamaGo toolchain
         uses: actions/cache@v4
@@ -264,7 +264,7 @@ jobs:
           path: ~/.tamago
           key: tamago-${{ runner.os }}-${{ hashFiles('Taskfile.yml') }}
       - name: Secure Boot matrix (SB off / enforcing-signed / enforcing-unsigned / dbx-hash-revoked)
-        run: task sb-matrix
+        run: task test:sb
 
   # Phase 6 (#22, replaces the #9 placeholder): the MVP's primary virtual
   # integration test — MockOpalDxe (EDK2 Storage Security mock) + the
@@ -289,7 +289,7 @@ jobs:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       # Cache the pinned TamaGo toolchain (task build/setup installs it under
-      # ~/.tamago when absent; `task toolchain`'s status check then skips the
+      # ~/.tamago when absent; `task build:toolchain`'s status check then skips the
       # download). Keyed on Taskfile.yml, which carries the version + checksum.
       - name: Cache pinned TamaGo toolchain
         uses: actions/cache@v4
@@ -312,7 +312,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          task mock-opal-matrix | tee mock-opal-serial.log
+          task test:opal-mock | tee mock-opal-serial.log
       - name: Upload serial log
         if: always()
         uses: actions/upload-artifact@v4
@@ -361,7 +361,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          task nvme-opal-matrix | tee nvme-opal-serial.log
+          task test:opal-nvme | tee nvme-opal-serial.log
       - name: Upload serial log
         if: always()
         uses: actions/upload-artifact@v4
@@ -414,7 +414,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          task linux-boot-matrix | tee linux-boot-serial.log
+          task test:linux | tee linux-boot-serial.log
       - name: Upload serial log
         if: always()
         uses: actions/upload-artifact@v4
@@ -453,7 +453,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          task override-matrix | tee override-serial.log
+          task test:override | tee override-serial.log
       - name: Upload serial log
         if: always()
         uses: actions/upload-artifact@v4
@@ -486,7 +486,7 @@ jobs:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       # Cache the pinned TamaGo toolchain (task build/setup installs it under
-      # ~/.tamago when absent; `task toolchain`'s status check then skips the
+      # ~/.tamago when absent; `task build:toolchain`'s status check then skips the
       # download). Keyed on Taskfile.yml, which carries the version + checksum.
       - name: Cache pinned TamaGo toolchain
         uses: actions/cache@v4
@@ -507,7 +507,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          task console-matrix | tee console-serial.log
+          task test:console | tee console-serial.log
       - name: Upload serial log
         if: always()
         uses: actions/upload-artifact@v4
@@ -555,7 +555,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          task keyfile-matrix | tee keyfile-serial.log
+          task test:keyfile | tee keyfile-serial.log
       - name: Upload serial log
         if: always()
         uses: actions/upload-artifact@v4
