@@ -53,9 +53,9 @@ enroll_keys() {
 # --no-microsoft, so the store trusts our test keys AND the built-in Microsoft KEK/db
 # (MS Corp UEFI CA 2011 + Windows Production PCA). Our db key still validates the PBA;
 # the Microsoft db then validates a real Microsoft-signed second stage. Used by the
-# Windows-handoff (A') scenario (win-handoff.sh), where firmware db — not a
-# Security-protocol override — validates Windows Boot Manager so PCR 7 stays intact
-# (ADR-0011). Uses global VFV.
+# Windows demo (demo-windows.sh), where firmware db — not a Security-protocol
+# override — validates Windows Boot Manager so PCR 7 / BitLocker stay intact
+# (ADR-0012). Uses global VFV.
 enroll_keys_ms() {
 	local template="$1" out="$2" guid="$3" work="$4"
 	"$VFV" --input "$template" --output "$out" \

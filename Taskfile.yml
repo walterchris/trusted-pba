@@ -41,31 +41,32 @@ tasks:
     cmds:
       - task: build:efi
 
+  # run (alias: qemu) — build PBA + fixture and boot in QEMU/OVMF, asserting the
+  # chainload markers. A building block of `check`/`ci`; not an everyday verb.
   run:
-    desc: Build PBA + test fixture and boot in QEMU/OVMF (asserts chainload markers)
     aliases: [qemu]
     cmds:
       - task: build:efi
       - task: build:testapp
       - TESTAPP={{.BIN}}/testapp.efi python3 test/qemu/expect-serial.py {{.BIN}}/{{.APP}}.efi
 
+  # test — host Go tests. Run via `check`/`ci`.
   test:
-    desc: Run host Go tests
     cmds:
       - go test ./...
 
+  # vet — go vet on host packages. Run via `lint` → `check`/`ci`.
   vet:
-    desc: Run go vet on host packages
     cmds:
       - go vet ./...
 
+  # fmt — format Go sources in place (gofmt -w).
   fmt:
-    desc: Format Go sources (gofmt -w)
     cmds:
       - gofmt -l -w .
 
+  # lint — gofmt check + go vet + golangci-lint (installs golangci-lint if missing).
   lint:
-    desc: gofmt check + go vet + golangci-lint (installs golangci-lint if missing)
     vars:
       GCL:
         sh: echo "$(go env GOPATH)/bin/golangci-lint"
@@ -82,7 +83,7 @@ tasks:
         "{{.GCL}}" run ./...
 
   check:
-    desc: 'Local CI: lint + host tests + chainload smoke (happy + fail-closed) + Secure Boot matrix'
+    desc: 'Fast local gate: lint + host tests + chainload smoke (happy + fail-closed) + Secure Boot matrix. The everyday pre-push check.'
     cmds:
       - task: lint
       - task: test
@@ -91,6 +92,18 @@ tasks:
       - task: test:sb-require
       - task: test:pba
       - task: test:sb
+
+  ci:
+    desc: 'Full local CI mirror: everything in `check`, plus every heavier QEMU/OVMF matrix (opal-mock, opal-nvme, console, keyfile, linux, override) and the PCR-divergence proof (override-pcr). Needs EDK2 build deps, swtpm, sbsign, virt-firmware.'
+    cmds:
+      - task: check
+      - task: test:opal-mock
+      - task: test:opal-nvme
+      - task: test:console
+      - task: test:keyfile
+      - task: test:linux
+      - task: test:override
+      - task: test:override-pcr
 
   clean:
     desc: Remove build artifacts

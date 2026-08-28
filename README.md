@@ -208,7 +208,6 @@ the Taskfile).
 | `sedtest` | Embed `policy_sed.json` (`sed_unlock: required` + a test PIN) — mock-Opal unlock matrix. |
 | `pbatest` | Embed `policy_pba.json` (validation `pba`) **and** substitute a test trust store (test CA + crafted dbx) — PBA-validation matrix. |
 | `policytest` | Embed `policy_require_sb.json` (`require_secure_boot: true`) — Secure Boot enforcement case. |
-| `winhandoff` | Embed `policy_winhandoff.json` (`require_secure_boot: true`, `pba`); build with `winhandoff,trustfull` for the Windows-handoff test. |
 | `overridetest` | Embed `policy_overridetest.json` (validation `pba-override`); build with `overridetest,pbatest,trustbroker`. |
 | `trustfull` | Add the third-party Microsoft UEFI CAs (shim/GRUB/Linux) on top of the two Windows CAs. Default is Windows-only. |
 | `trustbroker` | Compile in the `pba-override` Security2-override path (`internal/tbstub`). Without it, a `pba-override` entry fails closed. |
@@ -228,7 +227,6 @@ Every feature has a virtual test path; the suites below run in CI on every PR
 | `task mock-opal-matrix` | End-to-end unlock → `MBRDone` → chainload against the EDK2 `MockOpalDxe` SED, plus auth-fail / MBRDone-fail / partial-unlock / no-driver fail-closed cases |
 | `task sb-matrix` | Secure Boot: off, enforcing-signed, unsigned-rejected, untrusted-key-rejected, `dbx`-hash-revoked |
 | `task pba-matrix` | `pba`-validation: accept a trusted image, reject unsigned, reject `dbx`-revoked |
-| `task win-handoff` | Windows handoff: firmware `db` + PBA both validate a real MS-signed loader (gated on an operator-provided loader) |
 | `task override-pcr` | `pba-override`: confirms the PCR-7 divergence under a vTPM (why it is scoped away from BitLocker) |
 
 Real hardware, real Windows boot, and the faithful Shadow-MBR reveal are **not** covered

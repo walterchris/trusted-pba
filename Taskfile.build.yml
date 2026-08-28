@@ -38,8 +38,9 @@ vars:
     sh: git describe --tags --always --dirty 2>/dev/null || echo dev
 
 tasks:
+  # toolchain — install the pinned TamaGo toolchain (go1.26.6, linux/amd64) under
+  # $TAMAGO_ROOT (~/.tamago by default). Run via `setup`.
   toolchain:
-    desc: Install the pinned TamaGo toolchain (go1.26.6, linux/amd64) under $TAMAGO_ROOT (~/.tamago by default)
     status:
       - test -x "{{.TAMAGO_BIN}}"
     cmds:
@@ -56,8 +57,8 @@ tasks:
       - tar -xzf /tmp/tamago-{{.TAMAGO_VERSION}}.tar.gz -C "{{.TAMAGO_ROOT}}" --strip-components=3
       - '"{{.TAMAGO_BIN}}" version'
 
+  # deps — resolve and pin Go module dependencies (go-boot, tamago). Run via `setup`.
   deps:
-    desc: Resolve and pin Go module dependencies (go-boot, tamago)
     deps: [toolchain]
     cmds:
       - '{{.GOENV}} "{{.TAMAGO_BIN}}" get github.com/usbarmory/go-boot@{{.GOBOOT_VERSION}} github.com/usbarmory/tamago@{{.TAMAGO_LIB_VERSION}}'
@@ -83,14 +84,16 @@ tasks:
       - printf '\x26\x02' | dd of={{.BIN}}/{{.OUT}}.efi bs=1 seek=150 count=2 conv=notrunc,fsync status=none
       - echo "built {{.BIN}}/{{.OUT}}.efi (version {{.VERSION}})"
 
+  # efi — build bin/trusted-pba.efi (the default variant). The root `build` verb
+  # delegates here.
   efi:
-    desc: Build bin/trusted-pba.efi
     cmds:
       - task: _efi
         vars: { OUT: '{{.APP}}', EXTRA_TAGS: "" }
 
+  # testapp — build the gnu-efi chainload test fixture (bin/testapp.efi). Used by the
+  # test: matrices.
   testapp:
-    desc: Build the gnu-efi chainload test fixture (bin/testapp.efi)
     vars:
       # gnu-efi link inputs / headers; override via $EFILIB / $EFIINC if a distro
       # places them elsewhere than the Fedora/Ubuntu default of /usr/lib + /usr/include/efi.
@@ -114,8 +117,9 @@ tasks:
         --output-target efi-app-x86_64 {{.BIN}}/testapp.so {{.BIN}}/testapp.efi
       - echo "built {{.BIN}}/testapp.efi"
 
+  # tpmread — build the gnu-efi EFI_TCG2 PCR-reader fixture (bin/tpmread.efi) for
+  # measured-boot tests. Used by test:override-pcr.
   tpmread:
-    desc: Build the gnu-efi EFI_TCG2 PCR-reader fixture (bin/tpmread.efi) for measured-boot tests
     vars:
       EFILIB:
         sh: echo "${EFILIB:-/usr/lib}"
@@ -135,7 +139,8 @@ tasks:
         --output-target efi-app-x86_64 {{.BIN}}/tpmread.so {{.BIN}}/tpmread.efi
       - echo "built {{.BIN}}/tpmread.efi"
 
+  # mock-opal — build the EDK2 MockOpalDxe driver (test/edk2-mock-opal) used by the
+  # SED matrices and the linux/sed demos.
   mock-opal:
-    desc: Build the EDK2 MockOpalDxe driver (test/edk2-mock-opal) used by the SED matrices
     cmds:
       - test/edk2-mock-opal/build.sh

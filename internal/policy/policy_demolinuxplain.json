@@ -1,0 +1,13 @@
+{
+  "require_secure_boot": false,
+  "sed_unlock": "required",
+  "sed_credential": { "source": "console" },
+  "on_error": "halt",
+  "entries": [
+    {
+      "name": "alpine-linux",
+      "path": "EFI/LINUX/ALPINE.EFI",
+      "validation": "pba"
+    }
+  ]
+}
