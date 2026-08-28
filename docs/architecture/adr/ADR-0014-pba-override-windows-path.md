@@ -53,13 +53,15 @@ BitLocker:
    and the open pre-condition (4). The capability stays **doubly gated** (`-tags
    trustbroker` **and** an explicit `validation: pba-override` policy entry) and
    **absent from release builds** — this ADR does not activate it by default.
-2. **Mandatory provisioning requirement (deployment obligation).** A deployment using
-   `pba-override` for Windows **must** enable/seal BitLocker with the PBA-override
-   already in the measured boot chain, **and** must treat PBA/override updates as
-   PCR-7-affecting events (BitLocker suspend + reseal, or an accepted recovery-key
-   prompt). A deployment that cannot guarantee this **must** use firmware-`db`
-   validation (`pba`/`firmware`) instead — ADR-0013's Windows path remains valid and
-   is the safer default where the operator does not own provisioning order.
+2. **~~Mandatory provisioning requirement (deployment obligation).~~ WITHDRAWN —
+   superseded by the Empirical validation below.** This ADR proposed that a deployment
+   could use `pba-override` for Windows if it sealed BitLocker with the override in the
+   measured chain. The A/B test proved that is **unachievable**: the override makes
+   PCR 7's OS-loader authority non-reproducible, so BitLocker drops to recovery on every
+   boot regardless of provisioning order. **A Windows deployment that needs BitLocker
+   auto-unlock MUST use the firmware-`db` model** (db = key A + Microsoft CAs,
+   `validation: pba`/`firmware`; ADR-0013). The override Windows path is only for
+   our-keys-only deployments that do not use BitLocker (or accept a recovery prompt).
 3. **Demonstrator.** `task demo:windows` shows this model — firmware `db` = key A only
    (no Microsoft), the broker verifies `bootmgfw.efi` against the Microsoft Windows CAs
    in the PBA's **own** trust store (trust set `windows-only`), and the Security2
@@ -72,6 +74,12 @@ BitLocker:
      **Windows logon screen** (empirically validated, below). No mock SED on this path
      (its Storage-Security protocol confuses the installed OS's boot-device
      enumeration).
+   - **`BITLOCKER=1 WIN_OSDISK=<disk>` (`demowinbl`, firmware-`db` model)** — the ONLY
+     path that works with BitLocker: db = key A + Microsoft CAs, `validation: pba`, so
+     PCR 7 is a normal firmware-`db` boot. `test/qemu/demo-windows-bitlocker.sh` enables
+     BitLocker (TPM protector) on a copy of the disk (`SETUP=1`, one-time), then boots it
+     and the **TPM auto-unlocks** the encrypted volume to the Windows logon screen — no
+     recovery prompt. (This is not the override model; see the Empirical validation.)
 
    The fail-closed gate is demonstrated by a negative build (broker trust store
    **without** the Windows CAs): the broker rejects `bootmgfw` (`signer does not chain
@@ -110,21 +118,42 @@ Established (screenshot- and serial-backed):
   **signing-key / `db` / Secure-Boot-config** change reseals. (The over-broad "any
   change to the PBA … reseals" wording in the analysis above is superseded by this
   measurement.)
-- **BitLocker can be enabled through the override-booted Windows** — one run produced
-  the `-FVE-FS-` (BitLocker Full Volume Encryption) volume signature, with the TPM
-  visible to Windows via Fedora's 4M OVMF (the minimal custom PCR-test OVMF instead
-  bugchecks Windows `KMODE_EXCEPTION_NOT_HANDLED`).
+### BitLocker auto-unlock — the decisive A/B result
 
-**NOT established in emulation — requires real TPM hardware.** The *rigorous* BitLocker
-auto-unlock A/B test (protection fully On → positive: sealed-TPM + override auto-unlocks;
-negative: a fresh/wrong TPM → recovery) could **not** be made reproducible here:
-`swtpm`'s BitLocker sealing is unreliable (`Enable-BitLocker -TpmProtector` intermittently
-returns "no valid TPM" / COM `E_FAIL`; the TPM protector often will not attach, leaving
-`ProtectionStatus=Off`), compounded by QEMU segfaulting on ~half of TPM+KVM boots. These
-are **emulation-stack limitations, not properties of the PBA or the override.** This
-**strengthens open pre-condition (4)**: the auto-unlock-after-reseal claim must be
-validated on **real TPM hardware with real BitLocker** — `swtpm` is not a sufficient
-substitute for the seal step.
+Real Windows 11 + real BitLocker + a properly-manufactured swtpm (Fedora 4M TPM-enabled
+OVMF; the minimal custom PCR-test OVMF bugchecks Windows `KMODE_EXCEPTION_NOT_HANDLED`).
+The prerequisites that made in-emulation BitLocker reliable: `swtpm_setup` to manufacture
+the TPM (SRK/EK + sha256 PCR bank), `Initialize-Tpm` inside Windows to take ownership
+("The TPM does not have an owner set" otherwise), and waiting for `FullyEncrypted` before
+shutdown (protection engages only at 100%). With those, the A/B test is clean and
+repeatable — and it **overturns this ADR's central premise**:
+
+- **The Key-A-only override is INCOMPATIBLE with Windows BitLocker.** After enabling
+  BitLocker (TPM protector) on an override boot and rebooting through the same override +
+  same sealed TPM + identical SB vars, BitLocker drops to **recovery** every time —
+  `"Secure Boot policy has unexpectedly changed"`, error `…_OSLoaderAuthoritySignature_…`.
+  Because `bootmgfw` is admitted by the Security2 override with **no firmware-`db`
+  authority**, Windows measures the **OS-loader authority into PCR 7 non-reproducibly**;
+  the TPM never releases the VMK. So "seal BitLocker with the PBA-override in the chain →
+  auto-unlock" (decision 2) is **false** — the override cannot support BitLocker at all.
+  This is a stronger, empirical form of the PCR-7 concern ADR-0012/0013 raised.
+- **The firmware-`db` model DOES auto-unlock (validated positive + negative).** db = key A
+  **+ Microsoft CAs**, `validation: pba` (the PBA trust-brokers `bootmgfw` AND firmware
+  re-validates it against the Microsoft `db`). PCR 7 is then a normal firmware-`db` boot,
+  reproducible, so BitLocker's TPM protector releases the VMK:
+  - **Positive** (same sealed TPM, same SB vars): boots to the Windows **logon screen** —
+    auto-unlocked, no recovery.
+  - **Negative** (a fresh/wrong TPM): **BitLocker recovery** — confirming the unlock is
+    genuinely TPM-gated, not a leftover clear key.
+  This is exactly ADR-0013's BitLocker-safe path, now demonstrated end-to-end as
+  `task demo:windows BITLOCKER=1` (`demowinbl` variant, `test/qemu/demo-windows-bitlocker.sh`).
+
+**Consequence for this ADR:** the override Windows path is for our-keys-only deployments
+that **do not use BitLocker** (or accept a recovery prompt every boot). Any Windows
+deployment that needs BitLocker auto-unlock **must** use the firmware-`db` model
+(ADR-0013). Decision (2)'s "seal-with-PBA provisioning obligation" is therefore withdrawn
+as unachievable for the override; open pre-condition (4)'s HW caveat is **resolved in
+emulation** for the firmware-`db` model and **resolved negatively** for the override.
 
 ## Alternatives Considered
 - **Keep ADR-0013 #3 (firmware-`db` Windows).** Windows still boots and BitLocker
@@ -167,10 +196,14 @@ on AHCI). The broker-without-Windows-CAs negative (fail closed, override never a
 is validated in-session and should be wired as a permanent headless matrix (candidate:
 `test:override` extended with a Windows-target rejection case, or a dedicated
 `test:win-override-negative`). `test/qemu/override-pcr.sh` characterizes the PCR-7
-divergence; `test/qemu/pcr7-reproducibility.sh` proves PCR-7 is reproducible and
-authority-stable (the mechanism the auto-unlock claim rests on). The rigorous BitLocker
-auto-unlock A/B test is **not** an emulation test — it needs real TPM hardware (see
-Empirical validation).
+divergence; `test/qemu/pcr7-reproducibility.sh` proves the override PCR-7 is reproducible
+and authority-stable. The BitLocker auto-unlock A/B test IS an emulation test with a
+properly-manufactured swtpm: `test/qemu/demo-windows-bitlocker.sh` (+
+`bitlocker-enable.ps1`, `win-utilman-drive.py`) enables BitLocker in the firmware-`db`
+model and shows the TPM auto-unlock (positive), and a fresh/wrong TPM forces recovery
+(negative). It also demonstrates the override's BitLocker **incompatibility** (recovery
+with `OSLoaderAuthoritySignature` PCR-7 mismatch). A real-hardware confirmation with a
+real TPM remains desirable but is no longer the blocking gap.
 
 ## Rollback Plan
 Isolated behind `-tags trustbroker` + the `pba-override` mode. Reverting the Windows
