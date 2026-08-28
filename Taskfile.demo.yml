@@ -40,16 +40,22 @@ tasks:
       - test/qemu/demo-secureboot.sh {{.BIN}}/{{.APP}}-demosb.efi
 
   windows:
-    desc: 'Watchable Secure Boot → Windows demo (Key-A-only override model, ADR-0014) — OVMF with SB ENFORCING, db = OUR KEY A ONLY (no Microsoft): firmware validates the signed PBA → the PBA trust-brokers the Windows Boot Manager against the Microsoft CAs in its OWN trust store and admits it via the shim-style Security2 override → real Windows boots. DEFAULT: self-contained WinPE/Setup path (fetches a Windows 11 Enterprise Eval ISO, cached; + a mock Opal SED console unlock). WIN_OSDISK=<disk>: boot a FULL pre-installed Windows through the override on AHCI, all the way to the logon screen (no mock SED — it confuses the installed OS''s boot device). Flags: INTERACTIVE=1 type the SED passphrase (WinPE path); SCREENSHOT=<png> headless capture; WIN_ISO=<path> your own ISO. Needs qemu, OVMF, mtools, parted, xorriso, sbsign, openssl, virt-firmware, swtpm, EDK2 build deps.'
+    desc: 'Watchable Secure Boot → Windows demo. DEFAULT (Key-A-only override, ADR-0014): db = OUR KEY A ONLY, firmware validates the PBA, the PBA trust-brokers Windows Boot Manager against its own Microsoft CAs and admits it via the shim-style Security2 override → real Windows. Self-contained WinPE/Setup path (+ a mock Opal SED unlock); WIN_OSDISK=<disk> boots a FULL installed Windows through the override on AHCI to the logon screen. BITLOCKER=1 WIN_OSDISK=<disk> (firmware-db model, ADR-0013): db = key A + Microsoft CAs, firmware validates bootmgfw → normal PCR 7 → boot a BitLocker-encrypted Windows that TPM-AUTO-UNLOCKS through the PBA (SETUP=1 to (re)enable BitLocker first, one-time ~10 min; cached after). The override CANNOT do BitLocker (PCR-7 OS-loader authority is non-reproducible → recovery). Flags: INTERACTIVE=1 (WinPE SED passphrase); SCREENSHOT=<png>; WIN_ISO=<path>. Needs qemu, OVMF (incl. a 4M TPM build for BITLOCKER), mtools, ntfsprogs, parted, xorriso, sbsign, openssl, virt-firmware, swtpm, EDK2 build deps.'
     vars:
       OSD: '{{.WIN_OSDISK}}'
-      OUT: '{{.APP}}-{{if .OSD}}demowinnosed{{else}}demowin{{end}}'
-      TAGS: '{{if .OSD}}demowinnosed,trustbroker{{else}}demowin,trustbroker{{end}}'
+      BL: '{{.BITLOCKER}}'
+      OUT: '{{.APP}}-{{if eq .BL "1"}}demowinbl{{else if .OSD}}demowinnosed{{else}}demowin{{end}}'
+      TAGS: '{{if eq .BL "1"}}demowinbl{{else if .OSD}}demowinnosed,trustbroker{{else}}demowin,trustbroker{{end}}'
     cmds:
       - task: build:mock-opal
       - task: build:_efi
         vars: { OUT: '{{.OUT}}', EXTRA_TAGS: ',{{.TAGS}}' }
-      - WIN_OSDISK='{{.OSD}}' INTERACTIVE={{.INTERACTIVE | default "0"}} SERIAL={{.SERIAL | default ""}} SCREENSHOT={{.SCREENSHOT | default ""}} test/qemu/demo-windows.sh {{.BIN}}/{{.OUT}}.efi
+      - |
+        {{if eq .BL "1"}}
+        SETUP={{.SETUP | default ""}} WIN_OSDISK='{{.OSD}}' SCREENSHOT={{.SCREENSHOT | default ""}} SERIAL={{.SERIAL | default ""}} test/qemu/demo-windows-bitlocker.sh {{.BIN}}/{{.OUT}}.efi
+        {{else}}
+        WIN_OSDISK='{{.OSD}}' INTERACTIVE={{.INTERACTIVE | default "0"}} SERIAL={{.SERIAL | default ""}} SCREENSHOT={{.SCREENSHOT | default ""}} test/qemu/demo-windows.sh {{.BIN}}/{{.OUT}}.efi
+        {{end}}
 
   # sed — MANUAL/interactive: exercise the console credential source (ADR-0011 A2) in
   # QEMU with the MockOpalDxe SED; you type the SED passphrase at the prompt ("correct
