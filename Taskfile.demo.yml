@@ -19,12 +19,17 @@ vars:
 
 tasks:
   linux:
-    desc: 'Watchable full-flow demo — PBA banner → Secure Boot state → mock Opal SED unlock (MockOpalDxe) → chainload → a REAL Alpine Linux boots to login, in a QEMU window. Downloads a small Alpine ISO on first run (cached in .demo-cache/). SERIAL=1 for headless. Needs qemu, OVMF, mtools, parted, xorriso, ukify+systemd-boot stub, virt-firmware, EDK2 build deps.'
+    desc: 'Watchable full-flow demo — PBA → mock Opal SED unlock → the PBA validates + chainloads a signed Alpine UKI → REAL Alpine boots to login. Flags: SECUREBOOT=1 (default) firmware SB enforcing with db=key-A-only + pba-override trust broker for the key-B UKI; SECUREBOOT=0 plain (no SB); INTERACTIVE=1 type the passphrase yourself (else auto-typed); SERIAL=1 headless. Downloads Alpine on first run (cached). Needs qemu, OVMF, mtools, parted, xorriso, ukify+stub, sbsign, openssl, virt-firmware, EDK2 build deps.'
+    vars:
+      SB: '{{.SECUREBOOT | default "1"}}'
+      OUT: '{{.APP}}-{{if eq .SB "0"}}demolinuxplain{{else}}demolinuxsb{{end}}'
+      TAGS: '{{if eq .SB "0"}}demolinuxplain,pbatest{{else}}demolinuxsb,pbatest,trustbroker{{end}}'
     cmds:
       - task: build:mock-opal
+      - test/qemu/demo-secureboot-setup.sh
       - task: build:_efi
-        vars: { OUT: '{{.APP}}-demolinux', EXTRA_TAGS: ",demolinux" }
-      - test/qemu/demo-linux.sh {{.BIN}}/{{.APP}}-demolinux.efi
+        vars: { OUT: '{{.OUT}}', EXTRA_TAGS: ',{{.TAGS}}' }
+      - SECUREBOOT={{.SB}} INTERACTIVE={{.INTERACTIVE | default "0"}} SERIAL={{.SERIAL | default ""}} test/qemu/demo-linux.sh {{.BIN}}/{{.OUT}}.efi
 
   secureboot:
     desc: 'Watchable Secure Boot + trust-broker demo — OVMF with SB ENFORCING and our keys enrolled: firmware validates the signed PBA (hop 1) → the PBA trust-brokers the OS (`pba` validation of the Alpine UKI signed by a second key we added to the broker, hop 2) → firmware re-validates on load (hop 3) → real Alpine boots. Downloads Alpine on first run (cached). SERIAL=1 for headless. Needs qemu, OVMF, mtools, parted, xorriso, ukify+stub, sbsign, openssl, virt-firmware.'
@@ -41,8 +46,11 @@ tasks:
         vars: { OUT: '{{.APP}}-demowin', EXTRA_TAGS: ",demowin" }
       - test/qemu/demo-windows.sh {{.BIN}}/{{.APP}}-demowin.efi
 
+  # sed — MANUAL/interactive: exercise the console credential source (ADR-0011 A2) in
+  # QEMU with the MockOpalDxe SED; you type the SED passphrase at the prompt ("correct
+  # horse" unlocks). Superseded by `demo:linux INTERACTIVE=1`; kept as the minimal
+  # credential-only harness. Run in a terminal, not CI.
   sed:
-    desc: 'MANUAL/interactive: exercise the console credential source (ADR-0011 A2) in QEMU with the MockOpalDxe SED — you type the SED passphrase at the prompt ("correct horse" unlocks). Run in a terminal, not CI. Needs EDK2 build deps + virt-firmware.'
     cmds:
       - task: build:mock-opal
       - task: build:testapp
