@@ -1,4 +1,4 @@
-//go:build !policytest && !pbatest && !sedtest && !consoletest && !keyfiletest && !sednvmetest && !demolinuxsb && !demolinuxplain && !demosb && !demowin
+//go:build !policytest && !pbatest && !sedtest && !consoletest && !keyfiletest && !sednvmetest && !demolinuxsb && !demolinuxplain && !demosb && !demowin && !demowinnosed
 
 package policy
 

@@ -94,7 +94,13 @@ trusted-pba.efi
   +-- chainloader firmware-validated Windows path | PBA-validated custom path | recovery
 ```
 
-For Windows, let firmware validate Windows Boot Manager — do not manually load it.
+For Windows, the **default** is to let firmware validate Windows Boot Manager (MS CA
+in firmware `db`) — do not manually load it; this keeps PCR 7 / BitLocker on the stock
+seal (ADR-0013). **Exception (ADR-0014, Proposed):** on our-keys-only platforms
+(firmware `db` = key A only) the PBA may trust-broker Windows Boot Manager via the
+`pba-override` Security2 path — but only where BitLocker is sealed with the PBA in the
+chain and PBA updates are treated as reseal events. Do not adopt the override Windows
+path without ADR-0014's provisioning requirement.
 
 ## Go code rules
 

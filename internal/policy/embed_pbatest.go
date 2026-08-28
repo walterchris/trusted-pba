@@ -1,4 +1,4 @@
-//go:build pbatest && !sedtest && !overridetest && !demosb && !demolinuxsb && !demolinuxplain
+//go:build pbatest && !sedtest && !overridetest && !demosb && !demolinuxsb && !demolinuxplain && !demowin
 
 package policy
 
