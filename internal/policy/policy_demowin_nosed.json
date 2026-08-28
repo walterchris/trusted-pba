@@ -1,7 +1,6 @@
 {
   "require_secure_boot": true,
-  "sed_unlock": "required",
-  "sed_credential": { "source": "console" },
+  "sed_unlock": "none",
   "on_error": "halt",
   "entries": [
     {

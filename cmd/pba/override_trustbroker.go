@@ -52,11 +52,6 @@ func verifyAndLoadOverride(target string, enforcing bool) error {
 	}
 	fmt.Fprintf(out, "%s: pba-verified %s (trust set %s)\r\n", banner, target, truststore.TrustSet)
 
-	// Loud measured-boot warning: the override omits this image's PCR 7 authority
-	// event — a BitLocker seal to PCR 7 would break (ADR-0012). The operator, not
-	// code, is responsible for not using pba-override on a measured-boot target.
-	fmt.Fprintf(out, "%s: WARNING: pba-override diverges PCR 7 — not for BitLocker/measured-boot targets\r\n", banner)
-
 	restore, err := installOverride(&image[0], len(image))
 	if err != nil {
 		return fmt.Errorf("%s: override: %w", chainloadFail, err)

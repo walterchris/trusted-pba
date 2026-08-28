@@ -40,11 +40,16 @@ tasks:
       - test/qemu/demo-secureboot.sh {{.BIN}}/{{.APP}}-demosb.efi
 
   windows:
-    desc: 'Watchable Secure Boot → Windows demo — OVMF with SB ENFORCING, our key + the Microsoft db/dbx enrolled: firmware validates the signed PBA → the PBA hands off to the Windows Boot Manager, which the FIRMWARE validates via the Microsoft db (BitLocker-safe path) → real Windows 11 boots and you see the screen. Fetches a Windows 11 Enterprise Eval ISO on first run (cached; or set WIN_ISO=<path>). SCREENSHOT=<png> for a headless capture. Needs qemu, OVMF, mtools, parted, xorriso, sbsign, openssl, virt-firmware, swtpm.'
+    desc: 'Watchable Secure Boot → Windows demo (Key-A-only override model, ADR-0014) — OVMF with SB ENFORCING, db = OUR KEY A ONLY (no Microsoft): firmware validates the signed PBA → the PBA trust-brokers the Windows Boot Manager against the Microsoft CAs in its OWN trust store and admits it via the shim-style Security2 override → real Windows boots. DEFAULT: self-contained WinPE/Setup path (fetches a Windows 11 Enterprise Eval ISO, cached; + a mock Opal SED console unlock). WIN_OSDISK=<disk>: boot a FULL pre-installed Windows through the override on AHCI, all the way to the logon screen (no mock SED — it confuses the installed OS''s boot device). Flags: INTERACTIVE=1 type the SED passphrase (WinPE path); SCREENSHOT=<png> headless capture; WIN_ISO=<path> your own ISO. Needs qemu, OVMF, mtools, parted, xorriso, sbsign, openssl, virt-firmware, swtpm, EDK2 build deps.'
+    vars:
+      OSD: '{{.WIN_OSDISK}}'
+      OUT: '{{.APP}}-{{if .OSD}}demowinnosed{{else}}demowin{{end}}'
+      TAGS: '{{if .OSD}}demowinnosed,trustbroker{{else}}demowin,trustbroker{{end}}'
     cmds:
+      - task: build:mock-opal
       - task: build:_efi
-        vars: { OUT: '{{.APP}}-demowin', EXTRA_TAGS: ",demowin" }
-      - test/qemu/demo-windows.sh {{.BIN}}/{{.APP}}-demowin.efi
+        vars: { OUT: '{{.OUT}}', EXTRA_TAGS: ',{{.TAGS}}' }
+      - WIN_OSDISK='{{.OSD}}' INTERACTIVE={{.INTERACTIVE | default "0"}} SERIAL={{.SERIAL | default ""}} SCREENSHOT={{.SCREENSHOT | default ""}} test/qemu/demo-windows.sh {{.BIN}}/{{.OUT}}.efi
 
   # sed — MANUAL/interactive: exercise the console credential source (ADR-0011 A2) in
   # QEMU with the MockOpalDxe SED; you type the SED passphrase at the prompt ("correct

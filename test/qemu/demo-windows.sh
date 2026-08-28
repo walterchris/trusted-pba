@@ -1,40 +1,60 @@
 #!/usr/bin/env bash
 #
-# demo:windows — a watchable Secure Boot showcase that hands off to REAL Windows:
+# demo:windows — a watchable Secure Boot showcase that hands off to REAL Windows via
+# the Key-A-only override model (ADR-0013):
 #
-#   firmware (SB ENFORCING, Microsoft db/dbx + our key enrolled) validates the
-#   signed PBA (our key)  ->  the PBA chainloads the Windows Boot Manager, which
-#   the FIRMWARE validates against the Microsoft db (the canonical, BitLocker-safe
-#   Windows path — the PBA does not pre-verify it)  ->  Windows boots and you see
-#   the Windows screen.
+#   firmware (SB ENFORCING, db = OUR KEY A ONLY — no Microsoft) validates the signed
+#   PBA  ->  a mock Opal SED unlocks on the console credential ("correct horse")  ->
+#   the PBA TRUST-BROKERS the Windows Boot Manager against the Microsoft Windows CAs
+#   in its OWN embedded trust store, then admits it via the shim-style Security2
+#   override (validation "pba-override") — firmware db never sees Microsoft  ->
+#   Windows boots and you see the Windows screen.
+#
+#   NB: the override authorizes bootmgfw without a firmware db authority, so PCR 7
+#   diverges from a native Windows boot — BitLocker must be (re)sealed with the PBA
+#   already in the chain, or it drops to recovery (ADR-0013 / ADR-0012). The eval
+#   media used here has no BitLocker enrolled, so the demo itself boots cleanly.
 #
 #   demo-windows.sh <pba-demowin.efi>
 #
-# The Windows media is a Windows 11 Enterprise Evaluation ISO (no product key,
-# fetched from Microsoft's eval center on first run, cached in .demo-cache/). Set
-# WIN_ISO=/path/to/Windows.iso to use your own instead. It boots the Windows Setup
-# environment (real Windows / WinPE) — enough to "land in Windows and see the
-# screen"; install.wim is omitted from the boot volume (it exceeds FAT32's 4 GB
-# limit and is only needed to actually install).
-#
-# Boots graphically by default. Env:
-#   SERIAL=1                  headless (no Windows serial output, mostly for smoke)
+# Secure Boot and the trust broker are ALWAYS on here (that is the demo). Flags:
+#   INTERACTIVE=1             you type the SED passphrase ("correct horse") in the
+#                             QEMU window; default (0) auto-types it over QMP.
+#   SERIAL=1                  headless (no window; PBA console on serial, mostly smoke)
 #   SCREENSHOT=<file.png>     headless; capture the screen via QMP after a delay and exit
 #   SCREENSHOT_DELAY=<sec>    when to grab the screenshot (default 120)
 #   NOKVM=1 / NOTPM=1         force TCG / disable the emulated TPM 2.0
 #   WIN_ISO=<path>            use a local Windows ISO instead of fetching
 #
-# All Secure Boot keys are throwaway (bin/demowin/), never committed (baseline §13).
+# The Windows media is a Windows 11 Enterprise Evaluation ISO (no product key,
+# fetched from Microsoft's eval center on first run, cached in .demo-cache/). It
+# boots the Windows Setup environment (real Windows / WinPE) — enough to "land in
+# Windows and see the screen"; install.wim is omitted from the boot volume (it
+# exceeds FAT32's 4 GB limit and is only needed to actually install).
+#
+# Prerequisite: MockOpalDxe built (task build:mock-opal). All Secure Boot keys are
+# throwaway (bin/demowin/), never committed (baseline §13).
 set -euo pipefail
 
 PBA="${1:?usage: demo-windows.sh <pba-demowin.efi>}"
+INTERACTIVE="${INTERACTIVE:-0}"
 HERE="$(dirname "$(readlink -f "$0")")"
+
+# WIN_OSDISK set -> boot a FULL, pre-installed Windows through the override (on AHCI,
+# to the logon screen) instead of the self-contained WinPE Setup path. Different PBA
+# variant (no mock SED — it confuses the installed OS's boot-device enumeration).
+if [ -n "${WIN_OSDISK:-}" ]; then
+	exec "$HERE/demo-windows-installed.sh" "$PBA"
+fi
+
 ROOT="$(cd "$HERE/../.." && pwd)"
 OUT="$ROOT/bin/demowin"
 CACHE="${DEMO_CACHE:-$ROOT/.demo-cache}"
 MAT="$ROOT/internal/truststore/materials"
+DRIVER="$HERE/../edk2-mock-opal/MockOpalDxe.efi"
 UA="Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
 
+[ -f "$DRIVER" ] || { echo "MockOpalDxe.efi not found; run: task build:mock-opal" >&2; exit 2; }
 mkdir -p "$OUT" "$CACHE"
 
 # ---- 1. Resolve the Windows ISO (user-supplied or Microsoft eval-center) --------
@@ -79,40 +99,44 @@ resolve_vfv
 GUID="$(uuidgen)"
 
 WORK="$(mktemp -d)"
-QEMU_PID=""; SWTPM_PID=""
+QEMU_PID=""; SWTPM_PID=""; TAIL_PID=""; TYPER_PID=""
 cleanup() {
-	[ -n "$QEMU_PID" ]  && kill "$QEMU_PID"  2>/dev/null || true
-	[ -n "$SWTPM_PID" ] && kill "$SWTPM_PID" 2>/dev/null || true
+	for p in "$QEMU_PID" "$TYPER_PID" "$TAIL_PID" "$SWTPM_PID"; do [ -n "$p" ] && kill "$p" 2>/dev/null || true; done
 	rm -rf "$WORK"
 }
 trap cleanup EXIT
 trap 'exit 143' TERM INT
 
-echo "## Generating platform keys (PK/KEK/db=P) and signing the PBA"
+echo "## Generating platform keys (PK/KEK/db=P) and signing the PBA + mock SED driver"
 for role in PK KEK P; do
 	openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
 		-subj "/CN=TrustedPBA Demo $role/" \
 		-keyout "$OUT/$role.key" -out "$OUT/$role.crt" 2>/dev/null
 done
 sbsign --key "$OUT/P.key" --cert "$OUT/P.crt" --output "$WORK/pba-signed.efi" "$PBA"
+# The MockOpalDxe driver is dispatched under enforcing Secure Boot, so firmware must
+# validate it first — sign it with our db key (P), same as the PBA.
+sbsign --key "$OUT/P.key" --cert "$OUT/P.crt" --output "$WORK/driver.efi" "$DRIVER"
 
-# ---- 4. Enroll Secure Boot: our key (PBA) + Microsoft db/dbx (Windows loader) ---
-echo "## Enrolling Secure Boot (enforcing): PK/KEK + db{our key + Microsoft Windows CAs} + Microsoft dbx"
-# Enroll the Microsoft Windows db CAs explicitly from our pinned materials (the
-# tool's --microsoft-db flag is a no-op in this virt-firmware build). Windows Boot
-# Manager (25H2) is signed by "Microsoft Windows Production PCA 2011"; the 2023 CA
-# is added too so newer/older loaders validate. dbx is the real Microsoft dbx.
-"$VFV" --input "$OVMF_VARS_TEMPLATE" --output "$WORK/vars.fd" \
+# ---- 4. Enroll Secure Boot: our key (PBA) ONLY — no Microsoft in firmware ---------
+echo "## Enrolling Secure Boot (enforcing): PK/KEK + db = { our key A only } — NO Microsoft CAs in db"
+# The override model (ADR-0013): firmware trusts only our key A, so it validates the
+# PBA and nothing else. Windows Boot Manager (Microsoft-signed) is NOT in db — firmware
+# would reject it (EFI_SECURITY_VIOLATION) on its own. The PBA's trust broker verifies
+# it against the Microsoft Windows CAs in the PBA's OWN embedded trust store, then admits
+# it via the Security2 override (validation "pba-override"). --no-microsoft keeps the
+# Microsoft KEK/db out of firmware; the broker (not firmware) owns the Windows db/dbx.
+"$VFV" --input "$OVMF_VARS_TEMPLATE" --output "$WORK/vars0.fd" \
 	--set-pk  "$GUID" "$OUT/PK.crt" \
 	--add-kek "$GUID" "$OUT/KEK.crt" \
 	--add-db  "$GUID" "$OUT/P.crt" \
-	--add-db  "$GUID" "$MAT/db/win-production-pca-2011.der" \
-	--add-db  "$GUID" "$MAT/db/windows-uefi-ca-2023.der" \
-	--set-dbx "$MAT/dbx/dbx-amd64.bin" \
-	--secure-boot >/dev/null
+	--no-microsoft --secure-boot >/dev/null
+# Driver0000 -> MockOpalDxe so the mock SED's Storage Security protocol exists before
+# the PBA runs and looks for a locked drive to unlock.
+python3 "$HERE/add-driver-entry.py" "$WORK/vars0.fd" "$WORK/vars.fd" '\EFI\MOCK\MOCKOPALDXE.EFI' >/dev/null
 
-# ---- 5. Build the GPT/ESP boot disk: PBA in front of the real Windows loader ----
-echo "## Building the boot disk (PBA + Windows boot files on a FAT32 ESP)"
+# ---- 5. Build the GPT/ESP boot disk: PBA + mock SED in front of the Windows loader
+echo "## Building the boot disk (PBA + MockOpalDxe + Windows boot files on a FAT32 ESP)"
 DISK="$WORK/disk.img"
 truncate -s 3G "$DISK"
 parted -s "$DISK" mklabel gpt mkpart ESP fat32 1MiB 100% set 1 esp on >/dev/null 2>&1
@@ -123,6 +147,9 @@ mcopy -i "$DISK@@1M" -s -Q "$TREE"/* ::/
 # Place the SIGNED PBA as the default loader (firmware validates it via our db key);
 # the real Windows Boot Manager stays at \EFI\MICROSOFT\BOOT\BOOTMGFW.EFI (the target).
 mcopy -i "$DISK@@1M" -o "$WORK/pba-signed.efi" ::/EFI/BOOT/BOOTX64.EFI
+# Stage the signed mock SED driver where Driver0000 expects it.
+mmd   -i "$DISK@@1M" ::/EFI/MOCK 2>/dev/null || true
+mcopy -i "$DISK@@1M" -o "$WORK/driver.efi" ::/EFI/MOCK/MOCKOPALDXE.EFI
 
 # ---- 6. Optional emulated TPM 2.0 (Windows 11) ----------------------------------
 TPM_ARGS=()
@@ -139,6 +166,8 @@ fi
 ACCEL="tcg"; CPU="max"
 if [ -z "${NOKVM:-}" ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then ACCEL="kvm"; CPU="host"; fi
 
+SERIAL_LOG="$WORK/serial.log"; : > "$SERIAL_LOG"
+QMP_SOCK="$WORK/qmp.sock"
 QEMU_ARGS=(
 	-machine q35 -accel "$ACCEL" -cpu "$CPU" -m 4G -smp 2
 	-drive if=pflash,format=raw,unit=0,readonly=on,file="$OVMF_SECBOOT_CODE"
@@ -146,20 +175,31 @@ QEMU_ARGS=(
 	-drive "format=raw,file=$DISK,if=none,id=esp" -device virtio-blk-pci,drive=esp,bootindex=0
 	-device qemu-xhci -device usb-tablet
 	"${TPM_ARGS[@]}"
+	-serial "file:$SERIAL_LOG"
+	-qmp "unix:$QMP_SOCK,server,nowait"
 	-net none
 )
 
+# Auto-type the SED passphrase over QMP unless the operator wants to type it. The
+# typer watches the serial log for the PBA's "SED passphrase:" prompt (headless-safe;
+# keystrokes reach ConIn over PS/2, so it works with or without a display).
+start_typer() {
+	[ "$INTERACTIVE" = 1 ] && return
+	QMP_SOCK="$QMP_SOCK" SERIAL_LOG="$SERIAL_LOG" PASSPHRASE="correct horse" \
+		python3 "$HERE/demo-console-type.py" & TYPER_PID=$!
+}
+
 if [ -n "${SCREENSHOT:-}" ]; then
-	# Headless capture: boot, wait, grab the framebuffer via QMP, exit. Lets a
-	# maintainer (or CI) verify the demo lands in Windows without a display.
-	echo "## Booting headless; will screenshot to $SCREENSHOT after ${SCREENSHOT_DELAY:-120}s"
-	qemu-system-x86_64 "${QEMU_ARGS[@]}" -display none -vga std \
-		-qmp "unix:$WORK/qmp.sock,server,nowait" &
+	# Headless capture: boot, auto-unlock, wait, grab the framebuffer via QMP, exit.
+	# Lets a maintainer (or CI) verify the demo lands in Windows without a display.
+	echo "## Booting headless; auto-typing the SED passphrase; will screenshot to $SCREENSHOT after ${SCREENSHOT_DELAY:-120}s"
+	qemu-system-x86_64 "${QEMU_ARGS[@]}" -display none -vga std &
 	QEMU_PID=$!
+	start_typer
 	# Poll: open a FRESH QMP connection every interval and screendump, so a guest
 	# reboot / QEMU exit can't break a long-lived session. Writes out.<t>s.png at
 	# each step plus the final out; stops when QEMU is gone or the delay elapses.
-	python3 - "$WORK/qmp.sock" "$SCREENSHOT" "${SCREENSHOT_DELAY:-120}" <<'PY'
+	python3 - "$QMP_SOCK" "$SCREENSHOT" "${SCREENSHOT_DELAY:-120}" <<'PY'
 import socket, json, sys, time, os
 sockpath, out, delay = sys.argv[1], sys.argv[2], int(sys.argv[3])
 base = out[:-4] if out.endswith(".png") else out
@@ -189,11 +229,18 @@ PY
 	wait "$QEMU_PID" 2>/dev/null || true
 	echo "## Screenshots saved: ${SCREENSHOT%.png}.<t>s.png (+ $SCREENSHOT)"
 elif [ -n "${SERIAL:-}" ]; then
-	qemu-system-x86_64 "${QEMU_ARGS[@]}" -nographic &
-	QEMU_PID=$!; wait "$QEMU_PID"
+	echo "## Booting headless (serial); auto-typing the SED passphrase (accel=$ACCEL)."
+	qemu-system-x86_64 "${QEMU_ARGS[@]}" -display none &
+	QEMU_PID=$!
+	tail -n +1 -F "$SERIAL_LOG" 2>/dev/null & TAIL_PID=$!
+	start_typer
+	wait "$QEMU_PID"
 else
-	echo "## Booting the Windows demo in a QEMU window (accel=$ACCEL, TPM=${TPM_ARGS:+on})."
-	echo "## Watch: firmware validates the PBA → PBA hands off → firmware validates Windows Boot Manager → Windows boots."
+	intmsg="auto-typing the SED passphrase"; [ "$INTERACTIVE" = 1 ] && intmsg="type 'correct horse' at the SED prompt in the window"
+	echo "## Booting the Windows demo in a QEMU window (accel=$ACCEL, TPM=${TPM_ARGS:+on}); $intmsg."
+	echo "## Watch: firmware (Key A only) validates the PBA → mock SED unlock → PBA trust-brokers Windows Boot Manager + admits it via the Security2 override → Windows boots."
 	qemu-system-x86_64 "${QEMU_ARGS[@]}" &
-	QEMU_PID=$!; wait "$QEMU_PID"
+	QEMU_PID=$!
+	start_typer
+	wait "$QEMU_PID"
 fi

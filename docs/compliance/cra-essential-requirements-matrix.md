@@ -75,6 +75,15 @@ evidence · status · gaps.**
   trust-anchor staleness (R-011); `imageverify` parser hardening tracked via fuzz
   (`FuzzVerify`; a 2026-07-18 nightly-fuzz finding — a go-uefi parser panic on a
   malformed PE — is fixed by a `recover()`→`ErrParse` fail-closed backstop, R-009).
+  The gated `pba-override` Secure Boot override (ADR-0012/0013, R-014) is a deliberate,
+  non-default, non-release capability that makes the PBA's verdict authoritative for the
+  one pre-verified out-of-`db` image; **ADR-0014 (Proposed)** would extend it to the
+  Windows path for **our-keys-only** platforms, gated on a mandatory provisioning
+  obligation (BitLocker sealed with the PBA measured) plus an open PCR-7 pre-condition
+  (verify against a primary Microsoft source + validate on real hardware before
+  production), and pending the §5.3 human gate + an independent security review. Release
+  builds stay override-free, so the shipped ER-2 posture is unchanged (see risk R-014,
+  threat-model TB2).
 
 ### ER-3 — Confidentiality of secrets
 - **Interpretation:** the unlock secret is never logged, lives only in pre-boot
