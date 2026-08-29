@@ -153,6 +153,28 @@ func TestVerifyAccepts(t *testing.T) {
 	}
 }
 
+// TestVerifyAnchorReturnsRoot asserts VerifyAnchor returns the db CA the signer
+// chained to (the authority measured into PCR 7 by the pba-override path, ADR-0015).
+func TestVerifyAnchorReturnsRoot(t *testing.T) {
+	root := newCA(t, "Test db CA")
+	leafCert, leafKey := root.leaf(t, "Test Signer")
+	signed := signFixture(t, leafKey, leafCert, root.cert)
+
+	v := &Verifier{Roots: []*x509.Certificate{root.cert}}
+	anchor, err := v.VerifyAnchor(signed)
+	if err != nil {
+		t.Fatalf("expected accept, got %v", err)
+	}
+	if anchor == nil || !anchor.Equal(root.cert) {
+		t.Fatalf("anchor = %v, want the db root %q", anchor, root.cert.Subject)
+	}
+	// The returned cert must be the authentic v.Roots entry (real DER for
+	// measurement), not a validity-neutralized copy.
+	if anchor != root.cert {
+		t.Errorf("anchor is not the original v.Roots cert pointer")
+	}
+}
+
 // TestVerifyAcceptsExpiredSigner asserts the firmware-matching policy: a signer
 // whose validity window has lapsed must still verify, because UEFI Secure Boot does
 // not gate on signing-cert expiry (real Microsoft image-signing leaves are routinely
