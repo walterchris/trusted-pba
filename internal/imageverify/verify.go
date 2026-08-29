@@ -50,11 +50,25 @@ var (
 )
 
 // Verify reproduces firmware image authentication and returns nil only if the
-// image is trusted: its Authenticode hash is not revoked by dbx, its embedded
-// signature binds that hash, the signer chains to a db CA, and no certificate in
-// the signer's bundle or resolved chain (nor the db root) is revoked by dbx. Any
-// error means fail closed.
-func (v *Verifier) Verify(image []byte) (err error) {
+// image is trusted (see verify). Any error means fail closed.
+func (v *Verifier) Verify(image []byte) error {
+	_, err := v.verify(image)
+	return err
+}
+
+// VerifyAnchor is Verify but, on success, also returns the db CA certificate the
+// image's signer chained to — the authorizing authority. It backs the pba-override
+// measured-boot record of who vouched for the image (ADR-0015).
+func (v *Verifier) VerifyAnchor(image []byte) (*x509.Certificate, error) {
+	return v.verify(image)
+}
+
+// verify is the shared implementation: it returns nil only if the image is trusted
+// — its Authenticode hash is not revoked by dbx, its embedded signature binds that
+// hash, the signer chains to a db CA, and no certificate in the signer's bundle or
+// resolved chain (nor the db root) is revoked by dbx — and, on success, the db CA
+// (chain root) it anchored to. Any error means fail closed.
+func (v *Verifier) verify(image []byte) (anchor *x509.Certificate, err error) {
 	// The go-uefi PE/Authenticode/PKCS#7 parsers run on attacker-controlled bytes
 	// and can panic on malformed structures (e.g. an out-of-range PE size field
 	// drives bytes.Buffer.Truncate out of range at checksum.go:179). A panic here
@@ -68,24 +82,24 @@ func (v *Verifier) Verify(image []byte) (err error) {
 
 	pe, err := authenticode.Parse(bytes.NewReader(image))
 	if err != nil {
-		return errors.Join(ErrParse, err)
+		return nil, errors.Join(ErrParse, err)
 	}
 
 	// dbx by image hash takes precedence over any trust decision.
 	digest := pe.Hash(crypto.SHA256)
 	if digest == nil {
-		return fmt.Errorf("%w: cannot hash image", ErrParse)
+		return nil, fmt.Errorf("%w: cannot hash image", ErrParse)
 	}
 	if _, revoked := v.DBXHashes[hex.EncodeToString(digest)]; revoked {
-		return ErrRevokedHash
+		return nil, ErrRevokedHash
 	}
 
 	sigs, err := pe.Signatures()
 	if err != nil {
-		return errors.Join(ErrParse, err)
+		return nil, errors.Join(ErrParse, err)
 	}
 	if len(sigs) == 0 {
-		return ErrNoSignature
+		return nil, ErrNoSignature
 	}
 
 	// db roots, with validity periods neutralized (see ignoreValidity / package doc).
@@ -117,7 +131,7 @@ func (v *Verifier) Verify(image []byte) (err error) {
 			// bundle.) A legitimate image does not bundle dbx-revoked material;
 			// rejecting one is the safe pre-boot direction.
 			if slices.ContainsFunc(certs, v.revoked) {
-				return ErrRevokedCert
+				return nil, ErrRevokedCert
 			}
 			intermediates := x509.NewCertPool()
 			for _, c := range certs {
@@ -140,14 +154,23 @@ func (v *Verifier) Verify(image []byte) (err error) {
 			for _, chain := range chains {
 				for _, c := range chain {
 					if v.revoked(c) {
-						return ErrRevokedCert
+						return nil, ErrRevokedCert
 					}
 				}
 			}
-			return nil
+			// Anchor = the db CA the winning chain terminated at. Return the
+			// original v.Roots certificate (not the validity-neutralized copy in
+			// the chain) so callers see the authentic DER for measurement.
+			root := chains[0][len(chains[0])-1]
+			for _, r := range v.Roots {
+				if r.Equal(root) {
+					return r, nil
+				}
+			}
+			return root, nil
 		}
 	}
-	return ErrUntrusted
+	return nil, ErrUntrusted
 }
 
 // ignoreValidity returns a copy of c whose validity period spans all time. UEFI

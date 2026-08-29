@@ -71,6 +71,58 @@ func TestParseFailsClosed(t *testing.T) {
 	}
 }
 
+func TestRequireTPM(t *testing.T) {
+	// absent -> false (best-effort measurement)
+	p, err := Parse([]byte(`{"sed_unlock":"none","entries":[{"name":"w","path":"EFI/x.efi","validation":"pba-override"}]}`))
+	if err != nil || p.RequireTPM {
+		t.Fatalf("absent require_tpm -> %v (err %v), want false", p.RequireTPM, err)
+	}
+	// explicit true
+	p, err = Parse([]byte(`{"require_tpm":true,"sed_unlock":"none","entries":[{"name":"w","path":"EFI/x.efi","validation":"pba-override"}]}`))
+	if err != nil || !p.RequireTPM {
+		t.Fatalf("require_tpm:true -> %v (err %v), want true", p.RequireTPM, err)
+	}
+}
+
+func TestImageMeasurePCRs(t *testing.T) {
+	mk := func(json string) BootEntry {
+		p, err := Parse([]byte(json))
+		if err != nil {
+			t.Fatalf("Parse(%s): %v", json, err)
+		}
+		return p.Entries[0]
+	}
+	base := `"sed_unlock":"none","entries":[%s]`
+	// absent -> default {4}
+	e := mk(fmt.Sprintf("{"+base+"}", `{"name":"w","path":"EFI/x.efi","validation":"pba-override"}`))
+	if got := e.ImageMeasurePCRs(); len(got) != 1 || got[0] != 4 {
+		t.Errorf("absent -> %v, want [4]", got)
+	}
+	// explicit list
+	e = mk(fmt.Sprintf("{"+base+"}", `{"name":"w","path":"EFI/x.efi","validation":"pba-override","measure_image_pcrs":[4,11]}`))
+	if got := e.ImageMeasurePCRs(); len(got) != 2 || got[0] != 4 || got[1] != 11 {
+		t.Errorf("explicit -> %v, want [4 11]", got)
+	}
+	// explicit empty -> disabled (non-nil, len 0)
+	e = mk(fmt.Sprintf("{"+base+"}", `{"name":"w","path":"EFI/x.efi","validation":"pba-override","measure_image_pcrs":[]}`))
+	if got := e.ImageMeasurePCRs(); got == nil || len(got) != 0 {
+		t.Errorf("empty -> %v, want non-nil empty (disabled)", got)
+	}
+	// non-override -> nil regardless
+	e = mk(fmt.Sprintf("{"+base+"}", `{"name":"w","path":"EFI/x.efi","validation":"firmware"}`))
+	if got := e.ImageMeasurePCRs(); got != nil {
+		t.Errorf("firmware -> %v, want nil", got)
+	}
+	// measure_image_pcrs on a non-override entry is rejected
+	if _, err := Parse([]byte(`{"sed_unlock":"none","entries":[{"name":"w","path":"EFI/x.efi","validation":"firmware","measure_image_pcrs":[4]}]}`)); err == nil {
+		t.Error("expected error for measure_image_pcrs on a firmware entry")
+	}
+	// out-of-range PCR is rejected
+	if _, err := Parse([]byte(`{"sed_unlock":"none","entries":[{"name":"w","path":"EFI/x.efi","validation":"pba-override","measure_image_pcrs":[24]}]}`)); err == nil {
+		t.Error("expected error for PCR 24 (out of range)")
+	}
+}
+
 func TestParseOnError(t *testing.T) {
 	// Absent on_error defaults to halt (the safest fail-closed action).
 	p, err := Parse([]byte(`{"sed_unlock":"none","entries":[{"name":"x","path":"a","validation":"pba"}]}`))

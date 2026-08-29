@@ -37,6 +37,26 @@ type BootEntry struct {
 	Name       string         `json:"name"`
 	Path       string         `json:"path"` // ESP-relative, e.g. "EFI/TEST/TESTAPP.EFI"
 	Validation ValidationMode `json:"validation"`
+	// MeasureImagePCRs lists the PCRs the pba-override path extends the target
+	// image's Authenticode measurement into (as an EV_EFI_BOOT_SERVICES_APPLICATION
+	// event), filling the boot-application measurement that LoadImageBuffer skips so
+	// the chained image (bootmgfw, a UKI, …) is measured as a firmware device-path
+	// load would be. Absent (nil) defaults to [4]; an explicit empty list disables
+	// it. Only meaningful for — and only accepted on — pba-override entries.
+	MeasureImagePCRs []uint32 `json:"measure_image_pcrs,omitempty"`
+}
+
+// ImageMeasurePCRs resolves the effective PCRs the override should measure the target
+// image into: the default {4} when the field is unset, the configured list otherwise
+// (an explicit empty list disables measurement). Empty for non-override modes.
+func (e BootEntry) ImageMeasurePCRs() []uint32 {
+	if e.Validation != PBAOverride {
+		return nil
+	}
+	if e.MeasureImagePCRs == nil {
+		return []uint32{4}
+	}
+	return e.MeasureImagePCRs
 }
 
 // SEDUnlock is whether the PBA must unlock a TCG Opal SED before chainloading.
@@ -231,6 +251,13 @@ const (
 type Policy struct {
 	RequireSecureBoot bool        `json:"require_secure_boot"`
 	Entries           []BootEntry `json:"entries"`
+	// RequireTPM gates the pba-override's PCR measurements (ADR-0015/0016).
+	// When true, a missing TPM (no EFI_TCG2_PROTOCOL) or a failed extend fails closed
+	// — the override refuses to boot an image it cannot measure. When false (default),
+	// the measurement is best-effort: a missing/failed TPM is logged loudly and the
+	// verified image still boots (unattested). Authorization is unaffected either way
+	// (it rests on image verification + the tbstub arm gate, not the measurement).
+	RequireTPM bool `json:"require_tpm"`
 	// OnError is the action on any fail-closed decision; empty means OnErrorHalt.
 	OnError OnError `json:"on_error"`
 	// SEDUnlock gates the SED unlock step; empty means SEDUnlockRequired (fail
@@ -287,7 +314,16 @@ func Parse(data []byte) (*Policy, error) {
 			return nil, fmt.Errorf("entry %d: name and path are required", i)
 		}
 		switch e.Validation {
-		case Firmware, PBA, PBAOverride:
+		case Firmware, PBA:
+			if e.MeasureImagePCRs != nil {
+				return nil, fmt.Errorf("entry %q: measure_image_pcrs is only valid for pba-override", e.Name)
+			}
+		case PBAOverride:
+			for _, pcr := range e.MeasureImagePCRs {
+				if pcr > 23 {
+					return nil, fmt.Errorf("entry %q: measure_image_pcrs %d out of range (0-23)", e.Name, pcr)
+				}
+			}
 		default:
 			return nil, fmt.Errorf("entry %q: unknown validation mode %q", e.Name, e.Validation)
 		}

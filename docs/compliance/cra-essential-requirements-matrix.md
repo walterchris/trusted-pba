@@ -55,7 +55,14 @@ evidence · status · gaps.**
 - **Status:** Implemented (virtual).
 - **Gaps:** release-time assertion that production defaults are not a test/`none`
   policy (a `check-release-policy` gate exists for `sed_unlock`); hardware
-  validation (Phase 8).
+  validation (Phase 8). On the gated (`-tags trustbroker`, non-release)
+  `pba-override` measured-boot path (ADR-0015/0016, Proposed), the new
+  **`require_tpm`** flag makes measurement fail-closed when set (`true` → missing
+  TPM / failed extend refuses to boot); its **default `false`** is best-effort
+  (boot the already-verified image *unattested*, logged loudly — never a silent
+  fallback), keeping the override usable on TPM-less platforms while
+  authorization stays intact either way (measurement is advisory-to-attestation,
+  post-verify/post-arm). Deployments that mandate attestation set `require_tpm: true`.
 
 ### ER-2 — Integrity of code and data
 - **Interpretation:** the PBA binary, its policy, and any target EFI image are
@@ -84,6 +91,20 @@ evidence · status · gaps.**
   production), and pending the §5.3 human gate + an independent security review. Release
   builds stay override-free, so the shipped ER-2 posture is unchanged (see risk R-014,
   threat-model TB2).
+  **Attestation extensions (ADR-0015/0016, Proposed).** Within the same gated override,
+  ADR-0015 measures the override's *own authorization* into PCR 7 (`EV_EFI_VARIABLE_AUTHORITY`,
+  PBA-owned namespace + the trust-store CA that validated the image) and ADR-0016 measures the
+  chained image into policy-configured PCR(s) (default `[4]`, `EFI_TCG2_PE_COFF_IMAGE`),
+  restoring the boot-application measurement `LoadImageBuffer` skips — so the override's full
+  authorization chain becomes **measurable/attestable** (integrity) and BitLocker can bind the
+  default `0,2,4,11` profile under the override. Authorization is unchanged (measurement is
+  post-verify/post-arm, advisory-to-attestation); the new **`require_tpm`** flag (default
+  `false`) is the measurement-path fail-closed control (see ER-1). Independent security review
+  this session: **APPROVE**, all findings LOW; the PCR-4 `PE_COFF` value is firmware-dependent
+  and its real-hardware confirmation is an **open pre-condition, deferred by decision** (ADR-0016
+  F-1). Both ADRs Proposed, `-tags trustbroker`, pending the §5.3 human gate — shipped ER-2
+  posture unchanged. Evidence:
+  `evidence/security-review-records/2026-08-29-override-measured-boot-adr-0015-0016.md`.
 
 ### ER-3 — Confidentiality of secrets
 - **Interpretation:** the unlock secret is never logged, lives only in pre-boot

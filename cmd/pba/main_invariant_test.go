@@ -37,6 +37,7 @@ func TestVerifyAndLoadVerifiedBufferInvariant(t *testing.T) {
 	}
 	if fn == nil {
 		t.Fatal("verifyAndLoad not found in main.go")
+		return
 	}
 
 	params := fn.Type.Params.List

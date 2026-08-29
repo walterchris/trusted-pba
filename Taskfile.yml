@@ -60,10 +60,12 @@ tasks:
     cmds:
       - go vet ./...
 
-  # fmt — format Go sources in place (gofmt -w).
+  # fmt — format Go sources in place (gofmt -w). Excludes .demo-cache/ (vendored
+  # EDK2/OVMF checkouts whose upstream Go files we neither own nor format); the go
+  # tool already skips dot-dirs for vet/build, but gofmt's raw filesystem walk does not.
   fmt:
     cmds:
-      - gofmt -l -w .
+      - find . -path ./.demo-cache -prune -o -name '*.go' -print0 | xargs -0r gofmt -l -w
 
   # lint — gofmt check + go vet + golangci-lint (installs golangci-lint if missing).
   lint:
@@ -72,7 +74,7 @@ tasks:
         sh: echo "$(go env GOPATH)/bin/golangci-lint"
     cmds:
       - |
-        files=$(gofmt -l .)
+        files=$(find . -path ./.demo-cache -prune -o -name '*.go' -print0 | xargs -0r gofmt -l)
         if [ -n "$files" ]; then echo "gofmt needed on:"; echo "$files"; exit 1; fi
       - go vet ./...
       - |
